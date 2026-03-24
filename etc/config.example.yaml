@@ -9,3 +9,14 @@ model:
   api_key: ""         # API Key（敏感信息，勿提交到 Git）
   temperature: 0.7
   max_tokens: 4096
+
+# 日志配置
+logging:
+  level: "info"               # 全局日志级别: debug / info / warning / error
+  file_level: "debug"         # 文件日志级别（通常比控制台更详细）
+  workspace_dir: "."          # 日志文件输出目录
+  noisy_loggers:              # 需要抑制到 WARNING 的第三方库
+    - "asyncio"
+    - "httpcore"
+    - "httpx"
+    - "urllib3"

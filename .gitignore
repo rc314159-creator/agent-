@@ -27,6 +27,10 @@ etc/config.yaml
 htmlcov/
 .coverage
 
+# Logs
+*.log
+logs/
+
 # Node (web)
 web/node_modules/
 web/dist/
