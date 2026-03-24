@@ -1,0 +1,11 @@
+# Auto-Picture 配置模板
+# 复制本文件为 config.yaml 并填入实际值
+
+# 大模型配置
+model:
+  provider: ""        # 模型提供商，如 openai / anthropic / deepseek
+  model_name: ""      # 模型名称
+  base_url: ""        # API 地址
+  api_key: ""         # API Key（敏感信息，勿提交到 Git）
+  temperature: 0.7
+  max_tokens: 4096

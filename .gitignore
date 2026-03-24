@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Config with secrets
+etc/config.yaml
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# Environment
+.env
+.env.local
+
+# Test
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Node (web)
+web/node_modules/
+web/dist/
