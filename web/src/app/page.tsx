@@ -5,11 +5,15 @@ import { motion, AnimatePresence } from "framer-motion";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Header } from "@/components/layout/Header";
 import { Sidebar, CanvasMode } from "@/components/layout/Sidebar";
+import { ProjectPanel } from "@/components/layout/ProjectPanel";
 import { CanvasArea } from "@/components/canvas/CanvasArea";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { AIChatSidebar } from "@/components/ai/AIChatSidebar";
+import { AIPanel } from "@/components/ai/AIPanel";
 import { AIToggleProvider, useAIToggleProvider } from "@/hooks/useAIToggle";
-import { MessageSquare, Keyboard } from "lucide-react";
+import { ProjectProvider, useProject } from "@/hooks/useProject";
+import { Button } from "@/components/ui/button";
+import { MessageSquare, Keyboard, FolderOpen } from "lucide-react";
 
 const SHORTCUT_HINTS = [
   { key: "1 – 4", desc: "切换画布模式" },
@@ -81,6 +85,8 @@ function MeetFlowApp() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  const { currentProjectId, createProject } = useProject();
+
   return (
     <AIToggleProvider value={aiToggle}>
       <TooltipProvider>
@@ -92,22 +98,41 @@ function MeetFlowApp() {
         >
           <Header />
           <div className="flex-1 flex overflow-hidden">
-            <Sidebar activeMode={canvasMode} onModeChange={setCanvasMode} />
-            <div className="flex-1 flex flex-col min-w-0">
-              <div className="flex-1 flex overflow-hidden">
-                <CanvasArea mode={canvasMode} />
-                <VoicePanel width={voicePanelWidth} onWidthChange={setVoicePanelWidth} />
+            <ProjectPanel />
+            {currentProjectId ? (
+              <>
+                <Sidebar activeMode={canvasMode} onModeChange={setCanvasMode} />
+                <div className="flex-1 flex flex-col min-w-0">
+                  <div className="flex-1 flex overflow-hidden">
+                    <CanvasArea mode={canvasMode} />
+                    <VoicePanel width={voicePanelWidth} onWidthChange={setVoicePanelWidth} />
+                  </div>
+                  <AIPanel />
+                </div>
+                <AIChatSidebar
+                  open={aiChatOpen}
+                  onClose={() => setAiChatOpen(false)}
+                />
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
+                <FolderOpen className="w-16 h-16 mb-4 opacity-20" />
+                <h2 className="text-lg font-medium text-foreground/60 mb-2">选择或创建一个项目</h2>
+                <p className="text-sm mb-4">从左侧面板选择已有项目，或创建新项目开始记录</p>
+                <Button
+                  className="gap-2 bg-violet-600 hover:bg-violet-700"
+                  onClick={() => createProject("新项目")}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  创建新项目
+                </Button>
               </div>
-            </div>
-            <AIChatSidebar
-              open={aiChatOpen}
-              onClose={() => setAiChatOpen(false)}
-            />
+            )}
           </div>
 
           {/* Floating AI chat toggle button */}
           <AnimatePresence>
-            {aiToggle.aiEnabled && !aiChatOpen && (
+            {aiToggle.aiEnabled && !aiChatOpen && currentProjectId && (
               <motion.button
                 key="ai-fab"
                 initial={{ scale: 0, opacity: 0 }}
@@ -136,5 +161,9 @@ function MeetFlowApp() {
 }
 
 export default function Page() {
-  return <MeetFlowApp />;
+  return (
+    <ProjectProvider>
+      <MeetFlowApp />
+    </ProjectProvider>
+  );
 }
