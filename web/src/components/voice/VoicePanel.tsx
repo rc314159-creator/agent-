@@ -1,0 +1,325 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import {
+  Mic,
+  Square,
+  Copy,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+} from "lucide-react";
+import { mockTranscripts, mockSummary } from "@/lib/mock-data";
+import { useAIToggle } from "@/hooks/useAIToggle";
+import { SummaryDialog } from "@/components/voice/SummaryDialog";
+
+const speakerColors: Record<string, string> = {
+  "Speaker A": "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  "Speaker B": "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+  "Speaker C": "bg-amber-500/20 text-amber-300 border-amber-500/30",
+  "Speaker D": "bg-pink-500/20 text-pink-300 border-pink-500/30",
+};
+
+// Pre-computed sine-wave heights — stable across renders, no Math.random()
+const WAVE_BARS = 40;
+const waveHeights = Array.from({ length: WAVE_BARS }, (_, i) => {
+  const base = Math.sin((i / WAVE_BARS) * Math.PI * 3) * 0.35;
+  const secondary = Math.sin((i / WAVE_BARS) * Math.PI * 7 + 1.2) * 0.25;
+  return Math.max(0.1, 0.5 + base + secondary);
+});
+
+function formatTimer(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+interface VoicePanelProps {
+  width: number;
+  onWidthChange: (w: number) => void;
+}
+
+export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const { aiEnabled } = useAIToggle();
+  const dragStartX = useRef<number | null>(null);
+  const dragStartWidth = useRef<number>(width);
+  const scrollEndRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Live timer
+  useEffect(() => {
+    if (isRecording) {
+      timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isRecording]);
+
+  // Auto-scroll to bottom when recording starts (simulating new items)
+  useEffect(() => {
+    scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [isRecording]);
+
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragStartX.current = e.clientX;
+      dragStartWidth.current = width;
+
+      const onMove = (ev: MouseEvent) => {
+        if (dragStartX.current === null) return;
+        const delta = dragStartX.current - ev.clientX;
+        const next = Math.min(500, Math.max(280, dragStartWidth.current + delta));
+        onWidthChange(next);
+      };
+      const onUp = () => {
+        dragStartX.current = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [width, onWidthChange]
+  );
+
+  const handleToggleRecording = useCallback(() => {
+    if (!isRecording) setElapsed(0);
+    setIsRecording((v) => !v);
+  }, [isRecording]);
+
+  const handleCopyItem = useCallback(async (id: number, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  }, []);
+
+  const handleCopyAll = useCallback(async () => {
+    const allText = mockTranscripts
+      .map((t) => `[${t.speaker}] ${t.time}\n${t.text}`)
+      .join("\n\n");
+    try {
+      await navigator.clipboard.writeText(allText);
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  }, []);
+
+  if (collapsed) {
+    return (
+      <div className="w-10 border-l border-border/50 bg-background/60 backdrop-blur-xl flex flex-col items-center py-3">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 mb-2"
+          onClick={() => setCollapsed(false)}
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </Button>
+        <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center">
+          <Mic className="w-3 h-3 text-red-400" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <aside
+        className="border-l border-border/50 bg-background/60 backdrop-blur-xl flex flex-col shrink-0 relative overflow-hidden"
+        style={{ width }}
+      >
+        {/* Drag handle */}
+        <div
+          onMouseDown={handleDragStart}
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize group z-10 hover:bg-violet-500/40 transition-colors"
+          title="拖拽调整宽度"
+        >
+          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-12 rounded-full bg-border/0 group-hover:bg-violet-400/60 transition-colors" />
+        </div>
+
+        {/* Header */}
+        <div className="h-10 border-b border-border/30 flex items-center justify-between px-3 shrink-0">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            语音录制
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setCollapsed(true)}
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+
+        {/* Recording controls */}
+        <div className="p-4 border-b border-border/30 space-y-3">
+          <div className="flex items-center justify-between">
+            <Button
+              variant={isRecording ? "destructive" : "default"}
+              size="sm"
+              onClick={handleToggleRecording}
+              className={`gap-2 transition-all ${isRecording ? "shadow-[0_0_12px_rgba(239,68,68,0.4)]" : ""}`}
+            >
+              {isRecording ? (
+                <>
+                  <Square className="w-3.5 h-3.5" />
+                  停止录制
+                </>
+              ) : (
+                <>
+                  <Mic className="w-3.5 h-3.5" />
+                  开始录制
+                </>
+              )}
+            </Button>
+            {isRecording && (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs text-red-400 font-mono tabular-nums">
+                  {formatTimer(elapsed)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Waveform */}
+          <div className="h-12 rounded-lg bg-muted/30 border border-border/30 flex items-center justify-center overflow-hidden px-2">
+            {isRecording ? (
+              <div className="flex items-end gap-px h-8 w-full">
+                {waveHeights.map((h, i) => (
+                  <div
+                    key={i}
+                    className="flex-1 rounded-full"
+                    style={{
+                      background:
+                        "linear-gradient(to top, oklch(0.62 0.23 290), oklch(0.74 0.18 260))",
+                      height: `${h * 100}%`,
+                      animation: `voiceWaveBar ${0.8 + (i % 5) * 0.12}s ease-in-out infinite alternate`,
+                      animationDelay: `${(i * 35) % 400}ms`,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                点击录制按钮开始
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Transcript list */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="p-3 space-y-2">
+            {mockTranscripts.map((item, index) => (
+              <motion.div
+                key={item.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.04, duration: 0.2, ease: "easeOut" }}
+                className="group p-2.5 rounded-lg hover:bg-muted/30 transition-colors"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] px-1.5 py-0 shrink-0 ${speakerColors[item.speaker] || ""}`}
+                  >
+                    {item.speaker}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    {item.time}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                    onClick={() => handleCopyItem(item.id, item.text)}
+                  >
+                    {copiedId === item.id ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                  </Button>
+                </div>
+                <p className="text-xs leading-relaxed text-foreground/80">
+                  {item.text}
+                </p>
+              </motion.div>
+            ))}
+            <div ref={scrollEndRef} />
+          </div>
+        </ScrollArea>
+
+        {/* Bottom actions */}
+        <div className="p-3 border-t border-border/30 flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 text-xs gap-1.5"
+            onClick={handleCopyAll}
+          >
+            {copiedAll ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-400" />
+                已复制
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" />
+                复制全部
+              </>
+            )}
+          </Button>
+          {aiEnabled && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs gap-1.5 border-violet-500/30 text-violet-300 hover:bg-violet-500/10"
+              onClick={() => setSummaryOpen(true)}
+            >
+              <Sparkles className="w-3 h-3" />
+              一键总结
+            </Button>
+          )}
+        </div>
+      </aside>
+
+      <SummaryDialog
+        open={summaryOpen}
+        onClose={() => setSummaryOpen(false)}
+        summary={mockSummary}
+      />
+
+      <style>{`
+        @keyframes voiceWaveBar {
+          from { transform: scaleY(0.35); opacity: 0.55; }
+          to   { transform: scaleY(1);    opacity: 1; }
+        }
+      `}</style>
+    </>
+  );
+}

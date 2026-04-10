@@ -34,3 +34,9 @@ logs/
 # Node (web)
 web/node_modules/
 web/dist/
+web/.next/
+
+# Screenshots / test artifacts
+*.png
+web/screenshots/
+.playwright-mcp/
