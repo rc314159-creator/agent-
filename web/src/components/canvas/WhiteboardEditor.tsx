@@ -1,9 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useProject } from "@/hooks/useProject";
+import { useWorkspace } from "@/hooks/useWorkspace";
 
 export function WhiteboardEditor() {
   const [ExcalidrawComp, setExcalidrawComp] = useState<any>(null);
+  const { currentProject, saveField } = useProject();
+  const { setWhiteboardText } = useWorkspace();
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     async function loadExcalidraw() {
@@ -19,6 +24,28 @@ export function WhiteboardEditor() {
     loadExcalidraw();
   }, []);
 
+  const handleChange = useCallback(
+    (elements: readonly any[], _appState: any) => {
+      // Extract text from elements for workspace context
+      const texts = elements
+        .filter((el) => el.type === "text" && el.text)
+        .map((el) => el.text as string);
+      setWhiteboardText(texts.join(" "));
+
+      // Debounced save
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        saveField("whiteboard", elements);
+      }, 500);
+    },
+    [saveField, setWhiteboardText]
+  );
+
+  // Derive initial elements from project data
+  const savedElements = Array.isArray(currentProject?.whiteboard)
+    ? (currentProject.whiteboard as any[])
+    : [];
+
   if (!ExcalidrawComp) {
     return (
       <div className="h-full flex items-center justify-center bg-[#0d0d14]">
@@ -33,6 +60,7 @@ export function WhiteboardEditor() {
   return (
     <div className="h-full w-full" style={{ background: "#0d0d14" }}>
       <ExcalidrawComp
+        key={currentProject?.meta?.id ?? "no-project"}
         theme="dark"
         langCode="zh-CN"
         UIOptions={{
@@ -46,8 +74,9 @@ export function WhiteboardEditor() {
             viewBackgroundColor: "#0d0d14",
             currentItemFontFamily: 1,
           },
-          elements: [],
+          elements: savedElements,
         }}
+        onChange={handleChange}
       />
     </div>
   );

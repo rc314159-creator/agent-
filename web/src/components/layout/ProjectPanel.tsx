@@ -160,10 +160,13 @@ export function ProjectPanel() {
             </div>
           )}
           {projects.map((p) => (
-            <button
+            <div
               key={p.id}
+              role="button"
+              tabIndex={0}
               onClick={() => switchProject(p.id)}
-              className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all group ${
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchProject(p.id); } }}
+              className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all group cursor-pointer ${
                 currentProjectId === p.id
                   ? "bg-violet-500/15 border border-violet-500/30 text-foreground"
                   : "hover:bg-muted/30 text-foreground/70 border border-transparent"
@@ -203,7 +206,7 @@ export function ProjectPanel() {
                   <Trash2 className="w-3 h-3 text-muted-foreground hover:text-red-400" />
                 )}
               </Button>
-            </button>
+            </div>
           ))}
         </div>
       </ScrollArea>

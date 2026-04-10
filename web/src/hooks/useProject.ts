@@ -58,6 +58,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentProjectIdRef = useRef<string | null>(null);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -120,13 +121,20 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, [loadProjects, currentProjectId]);
 
+  // Keep ref in sync for use in debounced callbacks
+  useEffect(() => {
+    currentProjectIdRef.current = currentProjectId;
+  }, [currentProjectId]);
+
   const saveField = useCallback(async (field: string, data: unknown) => {
     if (!currentProjectId) return;
     // Debounced save
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {
+      const id = currentProjectIdRef.current;
+      if (!id) return;
       try {
-        await fetch(`/api/projects/${currentProjectId}`, {
+        await fetch(`/api/projects/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ [field]: data }),

@@ -1,6 +1,8 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
+import { useProject } from "@/hooks/useProject";
+import { useWorkspace } from "@/hooks/useWorkspace";
 
 const initialHTML = `<h1>产品群面讨论记录</h1>
 
@@ -45,6 +47,29 @@ const initialHTML = `<h1>产品群面讨论记录</h1>
 
 export function OutlineEditor() {
   const editorRef = useRef<HTMLDivElement>(null);
+  const { currentProject, saveField } = useProject();
+  const { setOutlineHTML } = useWorkspace();
+  // Track whether we've done the initial load to avoid overwriting user edits
+  const initializedRef = useRef(false);
+
+  // Load saved outline when project changes
+  useEffect(() => {
+    if (!editorRef.current) return;
+    initializedRef.current = false;
+    const savedHTML = currentProject?.outline;
+    editorRef.current.innerHTML = savedHTML || initialHTML;
+    // Sync to workspace on load
+    setOutlineHTML(editorRef.current.innerHTML);
+    initializedRef.current = true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.meta?.id]);
+
+  const handleInput = () => {
+    if (!editorRef.current || !initializedRef.current) return;
+    const html = editorRef.current.innerHTML;
+    setOutlineHTML(html);
+    saveField("outline", html);
+  };
 
   return (
     <div className="h-full overflow-auto">
@@ -120,7 +145,7 @@ export function OutlineEditor() {
           className="outline-editor text-sm leading-relaxed focus:outline-none min-h-[80vh]"
           contentEditable
           suppressContentEditableWarning
-          dangerouslySetInnerHTML={{ __html: initialHTML }}
+          onInput={handleInput}
           spellCheck={false}
         />
       </div>

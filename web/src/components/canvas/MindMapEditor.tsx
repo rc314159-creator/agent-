@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import { useProject } from "@/hooks/useProject";
+import { useWorkspace } from "@/hooks/useWorkspace";
 
 const defaultData = {
   data: { text: "智能协作助手", expand: true },
@@ -96,6 +98,9 @@ export function MindMapEditor() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mindMapRef = useRef<any>(null);
   const [ready, setReady] = useState(false);
+  const { currentProject, saveField } = useProject();
+  const { setMindmapText } = useWorkspace();
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let instance: any = null;
@@ -103,12 +108,14 @@ export function MindMapEditor() {
     async function init() {
       if (!containerRef.current) return;
 
+      const initialData = currentProject?.mindmap ?? defaultData;
+
       try {
         const mod = await import("simple-mind-map");
         const MindMap = (mod as any).default ?? mod;
         instance = new (MindMap as any)({
           el: containerRef.current,
-          data: defaultData,
+          data: initialData,
           theme: "default",
           themeConfig: darkThemeConfig,
           layout: "logicalStructure",
@@ -125,6 +132,28 @@ export function MindMapEditor() {
           nodeTextEditZIndex: 1000,
         });
         mindMapRef.current = instance;
+
+        // Listen to data changes for persistence
+        instance.on("data_change", (data: unknown) => {
+          // Extract text labels for workspace context
+          function extractText(node: any): string[] {
+            const texts: string[] = [];
+            if (node?.data?.text) texts.push(node.data.text);
+            if (Array.isArray(node?.children)) {
+              node.children.forEach((c: any) => texts.push(...extractText(c)));
+            }
+            return texts;
+          }
+          const allText = extractText(data).join(", ");
+          setMindmapText(allText);
+
+          // Debounced save to project
+          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = setTimeout(() => {
+            saveField("mindmap", data);
+          }, 500);
+        });
+
         // Auto-fit after layout settles
         setTimeout(() => {
           try { instance.view?.fit(); } catch {}
@@ -138,13 +167,16 @@ export function MindMapEditor() {
     init();
 
     return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       if (instance) {
         try {
           instance.destroy();
         } catch {}
       }
     };
-  }, []);
+  // Re-initialize when project switches (currentProject?.meta?.id changes)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.meta?.id]);
 
   const handleZoomIn = () => mindMapRef.current?.view?.enlarge();
   const handleZoomOut = () => mindMapRef.current?.view?.narrow();

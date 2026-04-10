@@ -12,6 +12,7 @@ import { AIChatSidebar } from "@/components/ai/AIChatSidebar";
 import { AIPanel } from "@/components/ai/AIPanel";
 import { AIToggleProvider, useAIToggleProvider } from "@/hooks/useAIToggle";
 import { ProjectProvider, useProject } from "@/hooks/useProject";
+import { WorkspaceProvider } from "@/hooks/useWorkspace";
 import { Button } from "@/components/ui/button";
 import { MessageSquare, Keyboard, FolderOpen } from "lucide-react";
 
@@ -89,6 +90,7 @@ function MeetFlowApp() {
 
   return (
     <AIToggleProvider value={aiToggle}>
+      <WorkspaceProvider>
       <TooltipProvider>
         <motion.div
           className="h-screen flex flex-col overflow-hidden"
@@ -156,6 +158,7 @@ function MeetFlowApp() {
           <ShortcutToast />
         </motion.div>
       </TooltipProvider>
+      </WorkspaceProvider>
     </AIToggleProvider>
   );
 }

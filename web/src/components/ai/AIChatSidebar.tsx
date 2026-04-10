@@ -19,12 +19,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { useAIToggle } from "@/hooks/useAIToggle";
+import { useWorkspace } from "@/hooks/useWorkspace";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
-  displayContent: string; // shown content (for streaming)
+  displayContent: string;
   timestamp: Date;
   streaming?: boolean;
 }
@@ -53,9 +54,9 @@ const WELCOME_MSG: Message = {
   id: "welcome",
   role: "assistant",
   content:
-    "你好！我是 Midflow AI 助手。我可以帮你：\n\n- 总结讨论要点\n- 搜索相关资讯\n- 自动填充画布内容\n- 竞品分析 / 用户画像 / MVP 规划\n\n有什么需要帮忙的？",
+    "你好！我是 MeetFlow AI 助手。我可以帮你：\n\n- 总结画布和转录内容\n- 搜索真实网络资讯\n- 自动填充画布笔记\n- 竞品分析 / 用户画像 / MVP 规划\n\n有什么需要帮忙的？",
   displayContent:
-    "你好！我是 Midflow AI 助手。我可以帮你：\n\n- 总结讨论要点\n- 搜索相关资讯\n- 自动填充画布内容\n- 竞品分析 / 用户画像 / MVP 规划\n\n有什么需要帮忙的？",
+    "你好！我是 MeetFlow AI 助手。我可以帮你：\n\n- 总结画布和转录内容\n- 搜索真实网络资讯\n- 自动填充画布笔记\n- 竞品分析 / 用户画像 / MVP 规划\n\n有什么需要帮忙的？",
   timestamp: new Date(),
 };
 
@@ -66,12 +67,12 @@ interface AIChatSidebarProps {
 
 export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
   const { aiEnabled } = useAIToggle();
+  const workspace = useWorkspace();
   const [messages, setMessages] = useState<Message[]>([WELCOME_MSG]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -82,7 +83,6 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
     async (text: string) => {
       if (!text.trim() || isTyping) return;
 
-      // Cancel any ongoing stream
       if (abortRef.current) {
         abortRef.current.abort();
         abortRef.current = null;
@@ -114,11 +114,13 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
         streaming: true,
       };
 
-      // Build conversation history for API
       const apiMessages = messages
         .filter((m) => m.id !== "welcome")
         .map((m) => ({ role: m.role, content: m.content }));
       apiMessages.push({ role: "user", content: text.trim() });
+
+      // Inject workspace context so AI can see canvas + transcripts
+      const context = workspace.getContextSummary();
 
       try {
         const controller = new AbortController();
@@ -127,7 +129,7 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
         const res = await fetch("/api/ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: apiMessages, stream: true }),
+          body: JSON.stringify({ messages: apiMessages, context, stream: true }),
           signal: controller.signal,
         });
 
@@ -182,7 +184,6 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
           }
         }
 
-        // Finalize
         setMessages((prev) =>
           prev.map((m) =>
             m.id === msgId ? { ...m, streaming: false } : m
@@ -199,7 +200,7 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
         }
       }
     },
-    [isTyping, messages]
+    [isTyping, messages, workspace]
   );
 
   const handleClearChat = useCallback(() => {

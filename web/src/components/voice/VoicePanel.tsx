@@ -13,9 +13,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Loader2,
 } from "lucide-react";
-import { mockTranscripts, mockSummary } from "@/lib/mock-data";
 import { useAIToggle } from "@/hooks/useAIToggle";
+import { useWorkspace } from "@/hooks/useWorkspace";
+import { useProject } from "@/hooks/useProject";
 import { SummaryDialog } from "@/components/voice/SummaryDialog";
 
 const speakerColors: Record<string, string> = {
@@ -91,11 +93,14 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
-  // Show mock transcripts initially; replaced by live transcripts once recording starts
-  const [transcripts, setTranscripts] = useState<TranscriptItem[]>(mockTranscripts);
+  const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
   const [isLive, setIsLive] = useState(false);
   const [asrError, setAsrError] = useState<string | null>(null);
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const { aiEnabled } = useAIToggle();
+  const workspace = useWorkspace();
+  const { saveField } = useProject();
   const dragStartX = useRef<number | null>(null);
   const dragStartWidth = useRef<number>(width);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -108,6 +113,8 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const transcriptIdRef = useRef(1);
   const elapsedRef = useRef(0);
+  const reconnectAttemptRef = useRef(0);
+  const MAX_RECONNECT = 3;
 
   // Keep elapsedRef in sync for use in audio callbacks
   useEffect(() => {
@@ -176,7 +183,14 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
       wsRef.current = null;
     }
     setIsRecording(false);
-  }, []);
+    // Save transcripts to project data on stop
+    setTranscripts((prev) => {
+      if (prev.length > 0) {
+        saveField("transcripts", prev);
+      }
+      return prev;
+    });
+  }, [saveField]);
 
   const connectASR = useCallback(async (audioContext: AudioContext, source: MediaStreamAudioSourceNode, processor: ScriptProcessorNode) => {
     try {
@@ -209,12 +223,18 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
             text = msg.delta ?? null;
           }
           if (text && text.trim()) {
-            setTranscripts((prev) => [...prev, {
+            const newItem = {
               id: transcriptIdRef.current++,
               speaker: "Speaker",
               text: text.trim(),
               time: formatTimestamp(elapsedRef.current),
-            }]);
+            };
+            setTranscripts((prev) => {
+              const updated = [...prev, newItem];
+              // Sync to workspace so AI can access transcripts
+              workspace.setTranscripts(updated);
+              return updated;
+            });
           }
         } catch { /* ignore */ }
       };
@@ -225,10 +245,20 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
       };
 
       ws.onclose = () => {
-        // Don't stop recording — just mark ASR as disconnected
         if (wsRef.current) {
-          setAsrError("语音识别已断开");
           wsRef.current = null;
+          // Auto-reconnect if still recording
+          if (reconnectAttemptRef.current < MAX_RECONNECT) {
+            reconnectAttemptRef.current++;
+            setAsrError(`语音识别断开，${5}秒后自动重连 (${reconnectAttemptRef.current}/${MAX_RECONNECT})...`);
+            setTimeout(() => {
+              if (audioContextRef.current && processorRef.current) {
+                connectASR(audioContext, source, processor);
+              }
+            }, 5000);
+          } else {
+            setAsrError("语音识别已断开（重连次数已达上限），请手动重新开始录制");
+          }
         }
       };
 
@@ -257,10 +287,12 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
 
       // Step 2: Recording is now active
       setTranscripts([]);
+      workspace.setTranscripts([]);
       setIsLive(true);
       setElapsed(0);
       setAsrError(null);
       transcriptIdRef.current = 1;
+      reconnectAttemptRef.current = 0;
       setIsRecording(true);
 
       // Step 3: Try to connect ASR (non-blocking — recording works even if ASR fails)
@@ -270,7 +302,7 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
       setAsrError("麦克风权限被拒绝");
       stopRecording();
     }
-  }, [stopRecording, connectASR]);
+  }, [stopRecording, connectASR, workspace]);
 
   const handleToggleRecording = useCallback(() => {
     if (isRecording) {
@@ -289,6 +321,39 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
       // clipboard unavailable
     }
   }, []);
+
+  const handleGenerateSummary = useCallback(async () => {
+    if (transcripts.length === 0) return;
+    setSummaryLoading(true);
+    setSummaryText("");
+    try {
+      const transcriptText = transcripts
+        .map((t) => `[${t.speaker}] ${t.time}: ${t.text}`)
+        .join("\n");
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: `请根据以下会议转录内容，生成一份结构化的会议总结报告。要求包含：核心要点、详细总结、行动项。使用 Markdown 格式。\n\n转录内容：\n${transcriptText}`,
+            },
+          ],
+          stream: false,
+        }),
+      });
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content ?? "";
+      setSummaryText(content);
+      setSummaryOpen(true);
+    } catch {
+      setSummaryText("生成失败，请重试。");
+      setSummaryOpen(true);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [transcripts]);
 
   const handleCopyAll = useCallback(async () => {
     const allText = transcripts
@@ -483,10 +548,15 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
               variant="outline"
               size="sm"
               className="flex-1 text-xs gap-1.5 border-violet-500/30 text-violet-300 hover:bg-violet-500/10"
-              onClick={() => setSummaryOpen(true)}
+              onClick={handleGenerateSummary}
+              disabled={summaryLoading || transcripts.length === 0}
             >
-              <Sparkles className="w-3 h-3" />
-              一键总结
+              {summaryLoading ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Sparkles className="w-3 h-3" />
+              )}
+              {summaryLoading ? "生成中..." : "一键总结"}
             </Button>
           )}
         </div>
@@ -495,7 +565,8 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
       <SummaryDialog
         open={summaryOpen}
         onClose={() => setSummaryOpen(false)}
-        summary={mockSummary}
+        summary={summaryText}
+        loading={summaryLoading}
       />
 
       <style>{`

@@ -89,6 +89,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="分享"
+          onClick={() => alert("分享功能开发中")}
         >
           <Share2 className="w-4 h-4" />
         </Button>
@@ -97,6 +98,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="下载"
+          onClick={() => alert("下载功能开发中")}
         >
           <Download className="w-4 h-4" />
         </Button>
@@ -105,6 +107,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="设置"
+          onClick={() => alert("设置功能开发中")}
         >
           <Settings className="w-4 h-4" />
         </Button>

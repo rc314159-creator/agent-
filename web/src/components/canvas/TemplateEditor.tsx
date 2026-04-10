@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Zap, User, BarChart3, Target, Map, Grid3X3 } from "lucide-react";
+import { useProject } from "@/hooks/useProject";
+import { useWorkspace } from "@/hooks/useWorkspace";
 
 type TemplateId = "swot" | "persona" | "competitive" | "priority" | "journey" | "canvas";
 
@@ -351,7 +353,30 @@ function BusinessCanvasTemplate() {
   );
 }
 
-function TemplateEditView({ templateId, templateName, onBack }: { templateId: TemplateId; templateName: string; onBack: () => void }) {
+function TemplateEditView({
+  templateId,
+  templateName,
+  onBack,
+  onContentChange,
+}: {
+  templateId: TemplateId;
+  templateName: string;
+  onBack: () => void;
+  onContentChange: (text: string) => void;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const handleInput = useCallback(() => {
+    if (!contentRef.current) return;
+    const nodes = contentRef.current.querySelectorAll("[contenteditable]");
+    const texts: string[] = [];
+    nodes.forEach((el) => {
+      const t = (el as HTMLElement).textContent?.trim();
+      if (t) texts.push(t);
+    });
+    onContentChange(texts.join(" | "));
+  }, [onContentChange]);
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/30 bg-background/40 shrink-0">
@@ -367,7 +392,7 @@ function TemplateEditView({ templateId, templateName, onBack }: { templateId: Te
         <div className="w-px h-4 bg-border/40" />
         <span className="text-sm font-medium">{templateName}</span>
       </div>
-      <div className="flex-1 overflow-auto p-5">
+      <div ref={contentRef} className="flex-1 overflow-auto p-5" onInput={handleInput}>
         {templateId === "swot" && <SwotTemplate />}
         {templateId === "persona" && <PersonaTemplate />}
         {templateId === "competitive" && <CompetitiveTemplate />}
@@ -381,6 +406,40 @@ function TemplateEditView({ templateId, templateName, onBack }: { templateId: Te
 
 export function TemplateEditor() {
   const [activeTemplate, setActiveTemplate] = useState<TemplateId | null>(null);
+  const { saveField, currentProject } = useProject();
+  const { setTemplateText } = useWorkspace();
+  // Keep a mutable ref of the persisted data map so we can merge on save
+  const templateDataRef = useRef<Record<string, string>>(
+    (currentProject?.templates?.data as Record<string, string>) ?? {}
+  );
+
+  // Restore active template from project data on project switch
+  useEffect(() => {
+    const saved = currentProject?.templates?.activeTemplate as TemplateId | null | undefined;
+    templateDataRef.current = (currentProject?.templates?.data as Record<string, string>) ?? {};
+    setActiveTemplate(saved ?? null);
+  }, [currentProject?.meta?.id]);
+
+  const handleContentChange = useCallback(
+    (text: string) => {
+      if (!activeTemplate) return;
+      setTemplateText(text);
+      // Merge with other templates' data, don't discard them
+      const mergedData = { ...templateDataRef.current, [activeTemplate]: text };
+      templateDataRef.current = mergedData;
+      saveField("templates", { activeTemplate, data: mergedData });
+    },
+    [activeTemplate, saveField, setTemplateText]
+  );
+
+  const handleTemplateSelect = useCallback(
+    (id: TemplateId) => {
+      setActiveTemplate(id);
+      // Preserve existing data, only update the activeTemplate pointer
+      saveField("templates", { activeTemplate: id, data: templateDataRef.current });
+    },
+    [saveField]
+  );
 
   if (activeTemplate) {
     const tpl = templates.find((t) => t.id === activeTemplate)!;
@@ -389,6 +448,7 @@ export function TemplateEditor() {
         templateId={activeTemplate}
         templateName={tpl.name}
         onBack={() => setActiveTemplate(null)}
+        onContentChange={handleContentChange}
       />
     );
   }
@@ -408,7 +468,7 @@ export function TemplateEditor() {
             return (
               <Card
                 key={tpl.id}
-                onClick={() => setActiveTemplate(tpl.id)}
+                onClick={() => handleTemplateSelect(tpl.id)}
                 className={`p-5 cursor-pointer hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 border ${tpl.borderColor} hover:border-opacity-60 bg-gradient-to-br ${tpl.gradient} group overflow-hidden relative`}
               >
                 <div
