@@ -148,6 +148,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const saveField = useCallback(async (field: string, data: unknown) => {
     if (!currentProjectId) return;
+    // Optimistically update local state so re-mounts read the latest value
+    setCurrentProject((prev) =>
+      prev ? { ...prev, [field]: data } : prev
+    );
     // Debounced save
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {

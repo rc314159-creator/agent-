@@ -200,9 +200,9 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
     try {
       const res = await fetch("/api/asr");
       if (!res.ok) throw new Error("ASR 配置获取失败");
-      const { wsUrl, apiKey, model } = await res.json();
+      const { wsUrl, model } = await res.json();
 
-      const ws = new WebSocket(`${wsUrl}?authorization=${encodeURIComponent(`Bearer ${apiKey}`)}&OpenAI-Beta=realtime%3Dv1`);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

@@ -6,44 +6,6 @@ import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { useProject } from "@/hooks/useProject";
 import { useWorkspace } from "@/hooks/useWorkspace";
 
-const defaultData = {
-  data: { text: "智能协作助手", expand: true },
-  children: [
-    {
-      data: { text: "用户需求", expand: true },
-      children: [
-        { data: { text: "多平台切换成本高" }, children: [] },
-        { data: { text: "移动端体验差" }, children: [] },
-        { data: { text: "学习成本过高" }, children: [] },
-      ],
-    },
-    {
-      data: { text: "产品定位", expand: true },
-      children: [
-        { data: { text: "Z世代职场人" }, children: [] },
-        { data: { text: "轻量化+移动优先" }, children: [] },
-        { data: { text: "AI增强" }, children: [] },
-      ],
-    },
-    {
-      data: { text: "竞品分析", expand: true },
-      children: [
-        { data: { text: "飞书 — 功能全但重" }, children: [] },
-        { data: { text: "Notion — 学习成本高" }, children: [] },
-        { data: { text: "钉钉 — 偏管理工具" }, children: [] },
-      ],
-    },
-    {
-      data: { text: "商业模式", expand: true },
-      children: [
-        { data: { text: "Freemium" }, children: [] },
-        { data: { text: "AI功能付费" }, children: [] },
-        { data: { text: "企业版定制" }, children: [] },
-      ],
-    },
-  ],
-};
-
 const darkThemeConfig = {
   backgroundColor: "#0d0d14",
   lineColor: "#6d28d9",
@@ -108,7 +70,7 @@ export function MindMapEditor() {
     async function init() {
       if (!containerRef.current) return;
 
-      const initialData = currentProject?.mindmap ?? defaultData;
+      const initialData = currentProject?.mindmap ?? { data: { text: "新主题" }, children: [] };
 
       try {
         const mod = await import("simple-mind-map");

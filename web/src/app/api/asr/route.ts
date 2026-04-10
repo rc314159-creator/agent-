@@ -21,8 +21,7 @@ export async function GET() {
   log.info("ASR config requested");
   return new Response(
     JSON.stringify({
-      wsUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
-      apiKey,
+      wsUrl: "ws://localhost:4928",
       model: "qwen3-asr-flash-realtime",
     }),
     { headers: { "Content-Type": "application/json" } }

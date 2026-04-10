@@ -58,9 +58,30 @@ export function OutlineEditor() {
     [renameProject]
   );
 
+  // Track the latest HTML for flush-on-unmount
+  const latestHTMLRef = useRef<string>("");
+  const dirtyRef = useRef(false);
+
+  // Flush save immediately when component unmounts (mode switch)
+  useEffect(() => {
+    return () => {
+      if (dirtyRef.current && latestHTMLRef.current && currentProjectId) {
+        // Bypass debounce — save immediately on unmount
+        fetch(`/api/projects/${currentProjectId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ outline: latestHTMLRef.current }),
+        }).catch(() => {});
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId]);
+
   const handleInput = () => {
     if (!editorRef.current || !initializedRef.current) return;
     const html = editorRef.current.innerHTML;
+    latestHTMLRef.current = html;
+    dirtyRef.current = true;
     setOutlineHTML(html);
     saveField("outline", html);
 

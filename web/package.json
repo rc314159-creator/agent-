@@ -6,7 +6,8 @@
     "dev": "next dev -p 4927",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "asr-proxy": "npx tsx src/asr-proxy.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.52",
