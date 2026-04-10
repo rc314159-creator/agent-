@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { streamText, generateText } from "ai";
+import { streamText, generateText, zodSchema, stepCountIs } from "ai";
+import { z } from "zod";
 import { NextRequest } from "next/server";
 import { apiLogger, logRequest, writeAuditLog } from "@/lib/logger";
 
@@ -57,17 +58,54 @@ export async function POST(req: NextRequest) {
     model,
     system: systemPrompt,
     messages,
+    tools: {
+      searchWeb: {
+        description:
+          "搜索互联网获取最新信息。当用户问到需要实时数据、新闻、或你不确定的事实时使用。",
+        inputSchema: zodSchema(
+          z.object({ query: z.string().describe("搜索关键词") })
+        ),
+        execute: async ({ query }: { query: string }) => {
+          try {
+            const res = await fetch(
+              "http://localhost:8888/search?q=" +
+                encodeURIComponent(query) +
+                "&format=json&language=zh-CN"
+            );
+            const data = await res.json();
+            const results = ((data.results as Array<{ title: string; url: string; content: string }>) || []).slice(0, 5);
+            return results
+              .map((r) => `${r.title}\n${r.url}\n${r.content}`)
+              .join("\n\n");
+          } catch {
+            return "搜索服务暂不可用";
+          }
+        },
+      },
+    },
+    stopWhen: stepCountIs(4),
   });
 
-  // Convert AI SDK stream to OpenAI-compatible SSE format for frontend compatibility
+  // Convert AI SDK fullStream to OpenAI-compatible SSE format.
+  // Handles tool-call steps: tool results are injected as text so the frontend
+  // (which expects plain text delta SSE) sees a coherent stream.
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
-      for await (const chunk of result.textStream) {
-        const data = JSON.stringify({
-          choices: [{ delta: { content: chunk } }],
-        });
+      const send = (content: string) => {
+        const data = JSON.stringify({ choices: [{ delta: { content } }] });
         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+      };
+      for await (const part of result.fullStream) {
+        if (part.type === "text-delta") {
+          send(part.text);
+        } else if (part.type === "tool-input-start") {
+          send(`\n[正在搜索: `);
+        } else if (part.type === "tool-input-delta") {
+          // accumulate silently — tool name already sent
+        } else if (part.type === "tool-result") {
+          send(`]\n`);
+        }
       }
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();

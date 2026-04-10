@@ -72,7 +72,7 @@ export function ProjectPanel() {
   }
 
   return (
-    <aside className="w-52 border-r border-border/50 bg-background/40 backdrop-blur-xl flex flex-col shrink-0">
+    <aside className="w-52 border-r border-border/50 bg-background/40 backdrop-blur-xl flex flex-col shrink-0 overflow-hidden">
       {/* Header */}
       <div className="h-10 border-b border-border/30 flex items-center justify-between px-3 shrink-0">
         <div className="flex items-center gap-1.5">
@@ -115,7 +115,7 @@ export function ProjectPanel() {
       </div>
 
       {/* Project list */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="p-1.5 space-y-0.5">
           {projects.length === 0 && (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">

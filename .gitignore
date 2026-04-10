@@ -40,3 +40,5 @@ web/.next/
 *.png
 web/screenshots/
 .playwright-mcp/
+test-results/
+web/test-results/
