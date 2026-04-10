@@ -9,7 +9,6 @@ import { ProjectPanel } from "@/components/layout/ProjectPanel";
 import { CanvasArea } from "@/components/canvas/CanvasArea";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { AIChatSidebar } from "@/components/ai/AIChatSidebar";
-import { AIPanel } from "@/components/ai/AIPanel";
 // CopilotKit removed — requires @copilotkit/runtime server package to work properly
 // Will be re-added when runtime is correctly configured
 import { AIToggleProvider, useAIToggleProvider } from "@/hooks/useAIToggle";
@@ -111,7 +110,6 @@ function MeetFlowApp() {
                     <CanvasArea mode={canvasMode} />
                     <VoicePanel width={voicePanelWidth} onWidthChange={setVoicePanelWidth} />
                   </div>
-                  <AIPanel />
                 </div>
                 <AIChatSidebar
                   open={aiChatOpen}

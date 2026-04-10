@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,11 +13,28 @@ import {
   Check,
 } from "lucide-react";
 import { useAIToggle } from "@/hooks/useAIToggle";
+import { useProject } from "@/hooks/useProject";
+import { toast } from "sonner";
 
 export function Header() {
   const { aiEnabled, toggleAI } = useAIToggle();
-  const [title, setTitle] = useState("智能协作助手讨论");
+  const { currentProject, renameProject } = useProject();
+  const projectName = currentProject?.meta.name ?? "MeetFlow";
+  const [title, setTitle] = useState(projectName);
   const [isEditing, setIsEditing] = useState(false);
+
+  // Keep title in sync when the active project changes
+  useEffect(() => {
+    setTitle(projectName);
+  }, [projectName]);
+
+  const handleTitleConfirm = () => {
+    setIsEditing(false);
+    const trimmed = title.trim();
+    if (trimmed && currentProject && trimmed !== currentProject.meta.name) {
+      renameProject(currentProject.meta.id, trimmed);
+    }
+  };
 
   return (
     <header className="h-14 border-b border-border/50 bg-background/80 backdrop-blur-xl flex items-center justify-between px-4 shrink-0 z-50">
@@ -39,13 +56,13 @@ export function Header() {
               onChange={(e) => setTitle(e.target.value)}
               className="h-7 text-sm w-72 bg-muted/50"
               autoFocus
-              onKeyDown={(e) => e.key === "Enter" && setIsEditing(false)}
+              onKeyDown={(e) => e.key === "Enter" && handleTitleConfirm()}
             />
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              onClick={() => setIsEditing(false)}
+              onClick={handleTitleConfirm}
               title="确认"
             >
               <Check className="w-3.5 h-3.5" />
@@ -89,7 +106,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="分享"
-          onClick={() => alert("分享功能开发中")}
+          onClick={() => toast.info("分享功能开发中")}
         >
           <Share2 className="w-4 h-4" />
         </Button>
@@ -98,7 +115,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="下载"
-          onClick={() => alert("下载功能开发中")}
+          onClick={() => toast.info("下载功能开发中")}
         >
           <Download className="w-4 h-4" />
         </Button>
@@ -107,7 +124,7 @@ export function Header() {
           size="icon"
           className="h-8 w-8"
           title="设置"
-          onClick={() => alert("设置功能开发中")}
+          onClick={() => toast.info("设置功能开发中")}
         >
           <Settings className="w-4 h-4" />
         </Button>

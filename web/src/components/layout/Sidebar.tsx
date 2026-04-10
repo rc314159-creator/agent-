@@ -11,7 +11,23 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useWorkspace } from "@/hooks/useWorkspace";
+import { useProject } from "@/hooks/useProject";
+
+function htmlToMarkdown(html: string): string {
+  return html
+    .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n\n')
+    .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n\n')
+    .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n\n')
+    .replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n')
+    .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n\n')
+    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export type CanvasMode = "outline" | "mindmap" | "whiteboard" | "template";
 
@@ -27,12 +43,25 @@ const modes = [
   { id: "template" as const, label: "模板", icon: LayoutTemplate, shortcut: "4", hasContent: true },
 ];
 
-const actions = [
-  { id: "export", label: "导出", icon: Download },
-];
 
 export function Sidebar({ activeMode, onModeChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { outlineHTML } = useWorkspace();
+  const { currentProject } = useProject();
+
+  const handleExport = useCallback(() => {
+    const markdown = htmlToMarkdown(outlineHTML);
+    const projectName = currentProject?.meta?.name ?? "大纲";
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${projectName}_${date}.md`;
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [outlineHTML, currentProject]);
 
   return (
     <aside
@@ -111,20 +140,17 @@ export function Sidebar({ activeMode, onModeChange }: SidebarProps) {
           <div className="h-px bg-border/50" />
         </div>
 
-        {actions.map((action) => (
-          <button
-            key={action.id}
-            title={collapsed ? action.label : undefined}
-            onClick={() => alert(`${action.label}功能开发中`)}
-            className={cn(
-              "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200",
-              collapsed && "justify-center px-0"
-            )}
-          >
-            <action.icon className="w-4 h-4 shrink-0" />
-            {!collapsed && <span>{action.label}</span>}
-          </button>
-        ))}
+        <button
+          title={collapsed ? "导出" : undefined}
+          onClick={handleExport}
+          className={cn(
+            "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200",
+            collapsed && "justify-center px-0"
+          )}
+        >
+          <Download className="w-4 h-4 shrink-0" />
+          {!collapsed && <span>导出</span>}
+        </button>
       </div>
 
       {/* Collapse toggle — subtle */}

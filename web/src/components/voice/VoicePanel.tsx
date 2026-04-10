@@ -336,6 +336,11 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   }, []);
 
   const startRecording = useCallback(async () => {
+    // Guard: mediaDevices API may be absent (insecure context or Playwright env)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setAsrError("麦克风不可用（浏览器未授权或不支持）");
+      return;
+    }
     try {
       // Step 1: Get microphone FIRST — this is the core functionality
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -510,7 +515,7 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
           </div>
 
           {/* ASR status */}
-          {asrError && isRecording && (
+          {asrError && (
             <div className="text-[10px] text-amber-400/80 bg-amber-500/10 rounded px-2 py-1 border border-amber-500/20">
               {asrError}
             </div>

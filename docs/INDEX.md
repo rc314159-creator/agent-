@@ -2,7 +2,7 @@
 
 > 本文件是知识库的**唯一入口**。Agent 和开发者都从这里开始导航。
 >
-> 最后更新: 2026-04-10 (v2.2 — AI 工具调用 searchWeb + 项目面板滚动修复)
+> 最后更新: 2026-04-10 (v2.3 — Critic BUG修复: saveField竞态/Header标题/录音guard/alert→toast + AIPanel死代码清理)
 
 ---
 
@@ -44,3 +44,4 @@
 - [2026.04.10 前端修复与功能完善](开发计划/2026.04.10/前端修复计划.md) — 状态: 已完成 (v1.3-frontend-fix) / 嵌套button修复、mock数据清除、AI实时总结/搜索、占位按钮、状态码转发、竞态修复
 - [2026.04.10 AI 核心重建](开发计划/2026.04.10/ai-core-rebuild.md) — 状态: 已完成 (v2.0-ai-core) / WorkspaceContext 全局数据总线 + 画布持久化 + Vercel AI SDK + SearXNG 搜索 + ASR 自动重连 + 自动填充
 - [2026.04.10 AI 工具调用 + 面板滚动修复](开发计划/2026.04.10/前端修复计划.md) — 状态: 已完成 (v2.2, commit 3076e84) / AI 流式工具调用 searchWeb + 项目面板 overflow 滚动修复
+- [2026.04.10 Critic BUG修复 v2.3](开发计划/2026.04.10/前端修复计划.md) — 状态: 已完成 (v2.3) / saveField竞态修复、Header标题接入currentProject、录音API guard、alert→toast、AIPanel死代码清理

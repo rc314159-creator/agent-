@@ -152,13 +152,13 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setCurrentProject((prev) =>
       prev ? { ...prev, [field]: data } : prev
     );
-    // Debounced save
+    // Snapshot the id at call time to avoid saving to the wrong project after a
+    // project switch that happens before the debounce timer fires.
+    const snapshotId = currentProjectId;
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(async () => {
-      const id = currentProjectIdRef.current;
-      if (!id) return;
       try {
-        await fetch(`/api/projects/${id}`, {
+        await fetch(`/api/projects/${snapshotId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ [field]: data }),
