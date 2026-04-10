@@ -10,25 +10,64 @@ const log = apiLogger("projects");
 const DATA_DIR = path.join(process.cwd(), "data", "projects");
 const INDEX_FILE = path.join(DATA_DIR, "index.json");
 
+type IndexData = { projects: Array<{ id: string; name: string; createdAt: string; updatedAt: string }> };
+
 function ensureDataDir() {
   if (!existsSync(DATA_DIR)) {
     mkdirSync(DATA_DIR, { recursive: true });
   }
 }
 
-async function readIndex(): Promise<{ projects: Array<{ id: string; name: string; createdAt: string; updatedAt: string }> }> {
+// Mutex to prevent concurrent read-modify-write corruption
+let indexLock: Promise<void> = Promise.resolve();
+
+async function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const prev = indexLock;
+  indexLock = new Promise((resolve) => { release = resolve; });
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release!();
+  }
+}
+
+async function readIndex(): Promise<IndexData> {
   ensureDataDir();
   if (!existsSync(INDEX_FILE)) {
-    const initial = { projects: [] };
+    const initial: IndexData = { projects: [] };
     await fs.writeFile(INDEX_FILE, JSON.stringify(initial, null, 2));
     return initial;
   }
   const content = await fs.readFile(INDEX_FILE, "utf-8");
-  return JSON.parse(content);
+  try {
+    return JSON.parse(content);
+  } catch {
+    // Recovery: if JSON is corrupted, try to extract the first valid object
+    log.error("index.json corrupted, attempting recovery");
+    let depth = 0, end = 0;
+    for (let i = 0; i < content.length; i++) {
+      if (content[i] === "{") depth++;
+      else if (content[i] === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end > 0) {
+      const recovered = JSON.parse(content.slice(0, end)) as IndexData;
+      await fs.writeFile(INDEX_FILE, JSON.stringify(recovered, null, 2));
+      return recovered;
+    }
+    const empty: IndexData = { projects: [] };
+    await fs.writeFile(INDEX_FILE, JSON.stringify(empty, null, 2));
+    return empty;
+  }
 }
 
-async function writeIndex(data: { projects: Array<{ id: string; name: string; createdAt: string; updatedAt: string }> }) {
-  await fs.writeFile(INDEX_FILE, JSON.stringify(data, null, 2));
+async function writeIndex(data: IndexData) {
+  const json = JSON.stringify(data, null, 2);
+  // Write to temp file first, then rename (atomic on most filesystems)
+  const tmpFile = INDEX_FILE + ".tmp";
+  await fs.writeFile(tmpFile, json);
+  await fs.rename(tmpFile, INDEX_FILE);
 }
 
 export async function GET() {
@@ -68,9 +107,11 @@ export async function POST(request: NextRequest) {
       fs.writeFile(path.join(projectDir, "chat.json"), "[]"),
     ]);
 
-    const index = await readIndex();
-    index.projects.push({ id, name, createdAt: now, updatedAt: now });
-    await writeIndex(index);
+    await withIndexLock(async () => {
+      const index = await readIndex();
+      index.projects.push({ id, name, createdAt: now, updatedAt: now });
+      await writeIndex(index);
+    });
 
     log.info({ id, name }, "Project created");
     return Response.json({ success: true, data: meta }, { status: 201 });
