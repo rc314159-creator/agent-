@@ -94,6 +94,7 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   // Show mock transcripts initially; replaced by live transcripts once recording starts
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>(mockTranscripts);
   const [isLive, setIsLive] = useState(false);
+  const [asrError, setAsrError] = useState<string | null>(null);
   const { aiEnabled } = useAIToggle();
   const dragStartX = useRef<number | null>(null);
   const dragStartWidth = useRef<number>(width);
@@ -177,44 +178,22 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
     setIsRecording(false);
   }, []);
 
-  const startRecording = useCallback(async () => {
+  const connectASR = useCallback(async (audioContext: AudioContext, source: MediaStreamAudioSourceNode, processor: ScriptProcessorNode) => {
     try {
-      // Fetch ASR config
       const res = await fetch("/api/asr");
-      if (!res.ok) throw new Error("Failed to fetch ASR config");
+      if (!res.ok) throw new Error("ASR 配置获取失败");
       const { wsUrl, apiKey, model } = await res.json();
 
-      // Get microphone
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      // Set up AudioContext for PCM capture
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-
-      // ScriptProcessorNode: 4096 samples, mono
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      // Connect WebSocket
       const ws = new WebSocket(`${wsUrl}?authorization=${encodeURIComponent(`Bearer ${apiKey}`)}&OpenAI-Beta=realtime%3Dv1`);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Send session.update
-        ws.send(
-          JSON.stringify({
-            type: "session.update",
-            session: {
-              model,
-              input_audio_format: "pcm16",
-              turn_detection: { type: "server_vad" },
-            },
-          })
-        );
-
-        // Now start processing audio
+        setAsrError(null);
+        ws.send(JSON.stringify({
+          type: "session.update",
+          session: { model, input_audio_format: "pcm16", turn_detection: { type: "server_vad" } },
+        }));
+        // Start sending audio only after WebSocket is ready
         source.connect(processor);
         processor.connect(audioContext.destination);
       };
@@ -223,64 +202,75 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
         try {
           const msg = JSON.parse(event.data as string);
           const type: string = msg.type ?? "";
-
           let text: string | null = null;
-
           if (type === "conversation.item.input_audio_transcription.completed") {
             text = msg.transcript ?? null;
           } else if (type === "response.audio_transcript.delta") {
             text = msg.delta ?? null;
           }
-
           if (text && text.trim()) {
-            const item: TranscriptItem = {
+            setTranscripts((prev) => [...prev, {
               id: transcriptIdRef.current++,
               speaker: "Speaker",
               text: text.trim(),
               time: formatTimestamp(elapsedRef.current),
-            };
-            setTranscripts((prev) => [...prev, item]);
+            }]);
           }
-        } catch {
-          // non-JSON message, ignore
-        }
+        } catch { /* ignore */ }
       };
 
       ws.onerror = () => {
-        stopRecording();
+        setAsrError("语音识别连接失败，录音继续中");
+        wsRef.current = null;
       };
 
       ws.onclose = () => {
-        // Cleanup if closed unexpectedly while recording
-        if (isRecording) {
-          stopRecording();
+        // Don't stop recording — just mark ASR as disconnected
+        if (wsRef.current) {
+          setAsrError("语音识别已断开");
+          wsRef.current = null;
         }
       };
 
-      // Send audio chunks via ScriptProcessorNode
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const channelData = e.inputBuffer.getChannelData(0);
         const base64 = resampleAndEncode(channelData, audioContext.sampleRate);
-        wsRef.current.send(
-          JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: base64,
-          })
-        );
+        wsRef.current.send(JSON.stringify({ type: "input_audio_buffer.append", audio: base64 }));
       };
+    } catch {
+      setAsrError("语音识别暂不可用，录音继续中");
+    }
+  }, []);
 
-      // Switch to live mode: clear mock transcripts, reset timer
+  const startRecording = useCallback(async () => {
+    try {
+      // Step 1: Get microphone FIRST — this is the core functionality
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      // Step 2: Recording is now active
       setTranscripts([]);
       setIsLive(true);
       setElapsed(0);
+      setAsrError(null);
       transcriptIdRef.current = 1;
       setIsRecording(true);
+
+      // Step 3: Try to connect ASR (non-blocking — recording works even if ASR fails)
+      connectASR(audioContext, source, processor);
     } catch {
-      // If anything fails, ensure clean state
+      // Only fail if microphone access is denied
+      setAsrError("麦克风权限被拒绝");
       stopRecording();
     }
-  }, [stopRecording, isRecording]);
+  }, [stopRecording, connectASR]);
 
   const handleToggleRecording = useCallback(() => {
     if (isRecording) {
@@ -391,6 +381,13 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
               </div>
             )}
           </div>
+
+          {/* ASR status */}
+          {asrError && isRecording && (
+            <div className="text-[10px] text-amber-400/80 bg-amber-500/10 rounded px-2 py-1 border border-amber-500/20">
+              {asrError}
+            </div>
+          )}
 
           {/* Waveform */}
           <div className="h-12 rounded-lg bg-muted/30 border border-border/30 flex items-center justify-center overflow-hidden px-2">
