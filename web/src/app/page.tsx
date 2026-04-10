@@ -10,8 +10,8 @@ import { CanvasArea } from "@/components/canvas/CanvasArea";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { AIChatSidebar } from "@/components/ai/AIChatSidebar";
 import { AIPanel } from "@/components/ai/AIPanel";
-import { CopilotKitProvider } from "@/components/ai/CopilotKitProvider";
-import { CopilotKitWorkspace } from "@/components/ai/CopilotKitWorkspace";
+// CopilotKit removed — requires @copilotkit/runtime server package to work properly
+// Will be re-added when runtime is correctly configured
 import { AIToggleProvider, useAIToggleProvider } from "@/hooks/useAIToggle";
 import { ProjectProvider, useProject } from "@/hooks/useProject";
 import { WorkspaceProvider } from "@/hooks/useWorkspace";
@@ -93,7 +93,6 @@ function MeetFlowApp() {
   return (
     <AIToggleProvider value={aiToggle}>
       <WorkspaceProvider>
-      <CopilotKitProvider>
       <TooltipProvider>
         <motion.div
           className="h-screen flex flex-col overflow-hidden"
@@ -160,9 +159,7 @@ function MeetFlowApp() {
 
           <ShortcutToast />
         </motion.div>
-      <CopilotKitWorkspace />
       </TooltipProvider>
-      </CopilotKitProvider>
       </WorkspaceProvider>
     </AIToggleProvider>
   );
