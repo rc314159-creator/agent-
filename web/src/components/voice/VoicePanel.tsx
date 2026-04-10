@@ -115,6 +115,10 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   const elapsedRef = useRef(0);
   const reconnectAttemptRef = useRef(0);
   const MAX_RECONNECT = 3;
+  // Streaming transcript state
+  const currentStreamingRef = useRef<{ id: number; text: string } | null>(null);
+  const speakerIndexRef = useRef(0);
+  const SPEAKER_NAMES = ["Speaker A", "Speaker B", "Speaker C", "Speaker D"];
 
   // Keep elapsedRef in sync for use in audio callbacks
   useEffect(() => {
@@ -216,25 +220,83 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
         try {
           const msg = JSON.parse(event.data as string);
           const type: string = msg.type ?? "";
-          let text: string | null = null;
-          if (type === "conversation.item.input_audio_transcription.completed") {
-            text = msg.transcript ?? null;
-          } else if (type === "response.audio_transcript.delta") {
-            text = msg.delta ?? null;
+
+          // New conversation item = new speaker turn (VAD detected speech boundary)
+          if (type === "conversation.item.created") {
+            // Finalize any in-progress streaming item
+            if (currentStreamingRef.current) {
+              currentStreamingRef.current = null;
+            }
+            // Rotate speaker for the new turn
+            speakerIndexRef.current = (speakerIndexRef.current + 1) % SPEAKER_NAMES.length;
           }
-          if (text && text.trim()) {
-            const newItem = {
-              id: transcriptIdRef.current++,
-              speaker: "Speaker",
-              text: text.trim(),
-              time: formatTimestamp(elapsedRef.current),
-            };
-            setTranscripts((prev) => {
-              const updated = [...prev, newItem];
-              // Sync to workspace so AI can access transcripts
-              workspace.setTranscripts(updated);
-              return updated;
-            });
+
+          // Streaming delta — append to current item in real-time
+          if (type === "response.audio_transcript.delta") {
+            const delta = msg.delta ?? "";
+            if (!delta) return;
+
+            if (!currentStreamingRef.current) {
+              // Start a new streaming item
+              const id = transcriptIdRef.current++;
+              currentStreamingRef.current = { id, text: delta };
+              const speaker = SPEAKER_NAMES[speakerIndexRef.current];
+              setTranscripts((prev) => {
+                const updated = [...prev, {
+                  id,
+                  speaker,
+                  text: delta,
+                  time: formatTimestamp(elapsedRef.current),
+                }];
+                workspace.setTranscripts(updated);
+                return updated;
+              });
+            } else {
+              // Append delta to existing streaming item
+              currentStreamingRef.current.text += delta;
+              const streamId = currentStreamingRef.current.id;
+              const fullText = currentStreamingRef.current.text;
+              setTranscripts((prev) => {
+                const updated = prev.map((t) =>
+                  t.id === streamId ? { ...t, text: fullText } : t
+                );
+                workspace.setTranscripts(updated);
+                return updated;
+              });
+            }
+          }
+
+          // Completed transcription — finalize the item
+          if (type === "conversation.item.input_audio_transcription.completed") {
+            const text = msg.transcript ?? "";
+            if (text.trim()) {
+              if (currentStreamingRef.current) {
+                // Update the streaming item with final text
+                const streamId = currentStreamingRef.current.id;
+                currentStreamingRef.current = null;
+                setTranscripts((prev) => {
+                  const updated = prev.map((t) =>
+                    t.id === streamId ? { ...t, text: text.trim() } : t
+                  );
+                  workspace.setTranscripts(updated);
+                  return updated;
+                });
+              } else {
+                // No streaming item, add as new completed item
+                const speaker = SPEAKER_NAMES[speakerIndexRef.current];
+                const newItem = {
+                  id: transcriptIdRef.current++,
+                  speaker,
+                  text: text.trim(),
+                  time: formatTimestamp(elapsedRef.current),
+                };
+                setTranscripts((prev) => {
+                  const updated = [...prev, newItem];
+                  workspace.setTranscripts(updated);
+                  return updated;
+                });
+              }
+            }
           }
         } catch { /* ignore */ }
       };
@@ -483,13 +545,15 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
         {/* Transcript list */}
         <ScrollArea className="flex-1 min-h-0">
           <div className="p-3 space-y-2">
-            {transcripts.map((item, index) => (
+            {transcripts.map((item, index) => {
+              const isStreaming = currentStreamingRef.current?.id === item.id;
+              return (
               <motion.div
                 key={item.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: isLive ? 0 : index * 0.04, duration: 0.2, ease: "easeOut" }}
-                className="group p-2.5 rounded-lg hover:bg-muted/30 transition-colors"
+                className={`group p-2.5 rounded-lg hover:bg-muted/30 transition-colors ${isStreaming ? "bg-violet-500/5 border border-violet-500/20" : ""}`}
               >
                 <div className="flex items-center gap-2 mb-1">
                   <Badge
@@ -498,6 +562,9 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
                   >
                     {item.speaker}
                   </Badge>
+                  {isStreaming && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                  )}
                   <span className="text-[10px] text-muted-foreground font-mono">
                     {item.time}
                   </span>
@@ -516,9 +583,13 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
                 </div>
                 <p className="text-xs leading-relaxed text-foreground/80">
                   {item.text}
+                  {isStreaming && (
+                    <span className="inline-block w-0.5 h-3 bg-violet-400 animate-pulse ml-0.5 align-middle" />
+                  )}
                 </p>
               </motion.div>
-            ))}
+              );
+            })}
             <div ref={scrollEndRef} />
           </div>
         </ScrollArea>

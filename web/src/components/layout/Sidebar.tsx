@@ -6,7 +6,6 @@ import {
   GitBranch,
   PenTool,
   LayoutTemplate,
-  Clock,
   Download,
   ChevronLeft,
   ChevronRight,
@@ -29,7 +28,6 @@ const modes = [
 ];
 
 const actions = [
-  { id: "history", label: "历史记录", icon: Clock },
   { id: "export", label: "导出", icon: Download },
 ];
 

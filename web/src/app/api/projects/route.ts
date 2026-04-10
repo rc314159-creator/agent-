@@ -3,6 +3,9 @@ import fs from "fs/promises";
 import { existsSync, mkdirSync } from "fs";
 import path from "path";
 import crypto from "crypto";
+import { apiLogger } from "@/lib/logger";
+
+const log = apiLogger("projects");
 
 const DATA_DIR = path.join(process.cwd(), "data", "projects");
 const INDEX_FILE = path.join(DATA_DIR, "index.json");
@@ -31,9 +34,10 @@ async function writeIndex(data: { projects: Array<{ id: string; name: string; cr
 export async function GET() {
   try {
     const index = await readIndex();
+    log.info({ count: index.projects.length }, "Listed projects");
     return Response.json({ success: true, data: index.projects });
   } catch (err) {
-    console.error("GET /api/projects error:", err);
+    log.error({ err }, "GET /api/projects error");
     return Response.json({ error: "Failed to read projects" }, { status: 500 });
   }
 }
@@ -45,6 +49,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "name is required" }, { status: 400 });
     }
 
+    log.info({ name }, "Creating project");
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const projectDir = path.join(DATA_DIR, id);
@@ -67,9 +72,10 @@ export async function POST(request: NextRequest) {
     index.projects.push({ id, name, createdAt: now, updatedAt: now });
     await writeIndex(index);
 
+    log.info({ id, name }, "Project created");
     return Response.json({ success: true, data: meta }, { status: 201 });
   } catch (err) {
-    console.error("POST /api/projects error:", err);
+    log.error({ err }, "POST /api/projects error");
     return Response.json({ error: "Failed to create project" }, { status: 500 });
   }
 }

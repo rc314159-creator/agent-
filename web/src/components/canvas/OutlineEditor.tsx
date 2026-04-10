@@ -1,74 +1,81 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { useProject } from "@/hooks/useProject";
 import { useWorkspace } from "@/hooks/useWorkspace";
 
-const initialHTML = `<h1>产品群面讨论记录</h1>
-
-<h2>一、核心问题分析</h2>
-<p>当前协同办公领域存在以下痛点：</p>
-<ul>
-  <li>用户在多平台之间切换的成本过高</li>
-  <li>现有解决方案（飞书/Notion）学习成本高</li>
-  <li>移动端体验普遍不佳</li>
-</ul>
-
-<h2>二、产品定位</h2>
-<p>面向 <strong>Z世代年轻职场人</strong> 的智能协作助手，主打：</p>
-<ol>
-  <li><strong>轻量化</strong> — 即开即用，零学习成本</li>
-  <li><strong>移动优先</strong> — 移动端体验领先桌面端</li>
-  <li><strong>AI增强</strong> — 用AI弥补轻量化的功能缺失</li>
-</ol>
-
-<h2>三、竞品分析</h2>
-<table>
-  <thead>
-    <tr><th>产品</th><th>优势</th><th>劣势</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>飞书</td><td>功能全面、协作强</td><td>移动端体验差、过于臃肿</td></tr>
-    <tr><td>Notion</td><td>灵活度高、模板丰富</td><td>学习成本高、国内访问慢</td></tr>
-    <tr><td>钉钉</td><td>用户基数大</td><td>偏管理工具、年轻用户不喜欢</td></tr>
-  </tbody>
-</table>
-
-<h2>四、商业模式</h2>
-<p>Freemium 模式：基础版免费，高级 AI 功能付费。</p>
-
-<h2>五、下一步行动</h2>
-<ul>
-  <li>☐ 完成用户画像和需求调研</li>
-  <li>☐ 输出竞品分析报告</li>
-  <li>☐ 确定 MVP 功能列表</li>
-  <li>☐ 设计产品原型</li>
-</ul>`;
-
 export function OutlineEditor() {
   const editorRef = useRef<HTMLDivElement>(null);
-  const { currentProject, saveField } = useProject();
+  const { currentProject, saveField, renameProject, currentProjectId } = useProject();
   const { setOutlineHTML } = useWorkspace();
   // Track whether we've done the initial load to avoid overwriting user edits
   const initializedRef = useRef(false);
+  // Track whether AI has already renamed this project
+  const autoNamedRef = useRef(false);
+  // Debounce timer for AI naming
+  const aiNameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load saved outline when project changes
   useEffect(() => {
     if (!editorRef.current) return;
     initializedRef.current = false;
+    autoNamedRef.current = false;
     const savedHTML = currentProject?.outline;
-    editorRef.current.innerHTML = savedHTML || initialHTML;
+    editorRef.current.innerHTML = savedHTML || "";
     // Sync to workspace on load
     setOutlineHTML(editorRef.current.innerHTML);
     initializedRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.meta?.id]);
 
+  const triggerAINaming = useCallback(
+    async (text: string, projectId: string) => {
+      if (!text.trim() || autoNamedRef.current) return;
+      autoNamedRef.current = true;
+      try {
+        const res = await fetch("/api/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                content: `根据以下内容生成一个简短的项目名称（5字以内），只返回名称文字：\n${text}`,
+              },
+            ],
+          }),
+        });
+        const data = await res.json();
+        const name = data?.choices?.[0]?.message?.content?.trim();
+        if (name) {
+          await renameProject(projectId, name);
+        }
+      } catch {
+        // silent fail — AI naming is best-effort
+      }
+    },
+    [renameProject]
+  );
+
   const handleInput = () => {
     if (!editorRef.current || !initializedRef.current) return;
     const html = editorRef.current.innerHTML;
     setOutlineHTML(html);
     saveField("outline", html);
+
+    // AI auto-naming: only on first meaningful input, debounced 3s
+    if (!autoNamedRef.current && currentProjectId) {
+      const text = editorRef.current.innerText || "";
+      if (text.trim().length > 0) {
+        if (aiNameTimerRef.current) clearTimeout(aiNameTimerRef.current);
+        const idAtInput = currentProjectId;
+        aiNameTimerRef.current = setTimeout(() => {
+          const currentText = editorRef.current?.innerText || "";
+          triggerAINaming(currentText, idAtInput);
+        }, 3000);
+      }
+    }
   };
 
   return (
@@ -138,15 +145,21 @@ export function OutlineEditor() {
         .outline-editor [contenteditable]:focus {
           outline: none;
         }
+        .outline-editor-placeholder:empty::before {
+          content: attr(data-placeholder);
+          color: hsl(var(--muted-foreground) / 0.4);
+          pointer-events: none;
+        }
       `}</style>
       <div className="max-w-3xl mx-auto py-8 px-6">
         <div
           ref={editorRef}
-          className="outline-editor text-sm leading-relaxed focus:outline-none min-h-[80vh]"
+          className="outline-editor outline-editor-placeholder text-sm leading-relaxed focus:outline-none min-h-[80vh]"
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
           spellCheck={false}
+          data-placeholder="开始输入内容，AI 将自动为项目命名…"
         />
       </div>
     </div>

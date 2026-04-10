@@ -31,6 +31,7 @@ interface ProjectContextValue {
   createProject: (name: string) => Promise<string | null>;
   switchProject: (id: string) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
+  renameProject: (id: string, name: string) => Promise<void>;
   saveField: (field: string, data: unknown) => Promise<void>;
 }
 
@@ -44,6 +45,7 @@ const ProjectContext = createContext<ProjectContextValue>({
   createProject: async () => null,
   switchProject: async () => {},
   deleteProject: async () => {},
+  renameProject: async () => {},
   saveField: async () => {},
 });
 
@@ -121,6 +123,24 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, [loadProjects, currentProjectId]);
 
+  const renameProject = useCallback(async (id: string, name: string) => {
+    try {
+      await fetch(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meta: { name } }),
+      });
+      await loadProjects();
+      if (currentProjectIdRef.current === id) {
+        setCurrentProject((prev) =>
+          prev ? { ...prev, meta: { ...prev.meta, name } } : prev
+        );
+      }
+    } catch {
+      // silent fail
+    }
+  }, [loadProjects]);
+
   // Keep ref in sync for use in debounced callbacks
   useEffect(() => {
     currentProjectIdRef.current = currentProjectId;
@@ -160,6 +180,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     createProject,
     switchProject,
     deleteProject,
+    renameProject,
     saveField,
   };
 

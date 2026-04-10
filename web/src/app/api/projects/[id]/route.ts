@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import fs from "fs/promises";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
 import path from "path";
+import { apiLogger } from "@/lib/logger";
+
+const log = apiLogger("projects/[id]");
 
 const DATA_DIR = path.join(process.cwd(), "data", "projects");
 const INDEX_FILE = path.join(DATA_DIR, "index.json");
@@ -33,9 +36,11 @@ export async function GET(
     const dir = projectDir(id);
 
     if (!existsSync(dir)) {
+      log.warn({ id }, "Project not found");
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
+    log.info({ id }, "Loading project");
     const [meta, outline, mindmap, whiteboard, templates, transcripts, chat] = await Promise.all([
       readJSON(path.join(dir, "meta.json"), null),
       fs.readFile(path.join(dir, "outline.html"), "utf-8").catch(() => ""),
@@ -51,7 +56,7 @@ export async function GET(
       data: { meta, outline, mindmap, whiteboard, templates, transcripts, chat },
     });
   } catch (err) {
-    console.error("GET /api/projects/[id] error:", err);
+    log.error({ err }, "GET /api/projects/[id] error");
     return Response.json({ error: "Failed to read project" }, { status: 500 });
   }
 }
@@ -65,10 +70,12 @@ export async function PUT(
     const dir = projectDir(id);
 
     if (!existsSync(dir)) {
+      log.warn({ id }, "Project not found for update");
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
     const body = await request.json();
+    log.info({ id, fields: Object.keys(body) }, "Updating project");
     const writes: Promise<void>[] = [];
 
     if ("outline" in body) {
@@ -129,9 +136,10 @@ export async function PUT(
 
     await Promise.all(writes);
 
+    log.info({ id }, "Project updated");
     return Response.json({ success: true });
   } catch (err) {
-    console.error("PUT /api/projects/[id] error:", err);
+    log.error({ err }, "PUT /api/projects/[id] error");
     return Response.json({ error: "Failed to update project" }, { status: 500 });
   }
 }
@@ -145,6 +153,7 @@ export async function DELETE(
     const dir = projectDir(id);
 
     if (!existsSync(dir)) {
+      log.warn({ id }, "Project not found for delete");
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
@@ -154,9 +163,10 @@ export async function DELETE(
     index.projects = index.projects.filter((p) => p.id !== id);
     await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
 
+    log.info({ id }, "Project deleted");
     return Response.json({ success: true });
   } catch (err) {
-    console.error("DELETE /api/projects/[id] error:", err);
+    log.error({ err }, "DELETE /api/projects/[id] error");
     return Response.json({ error: "Failed to delete project" }, { status: 500 });
   }
 }

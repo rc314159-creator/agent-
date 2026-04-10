@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
+import { apiLogger, logRequest, writeAuditLog } from "@/lib/logger";
 
+const log = apiLogger("search");
 const SEARXNG_URL = "http://localhost:8888";
 
 export async function POST(req: NextRequest) {
@@ -9,6 +11,8 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "query is required" }, { status: 400 });
   }
 
+  const endLog = logRequest(log, "POST", "/api/search", { query, count });
+
   try {
     const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(query)}&format=json&language=zh-CN`;
     const res = await fetch(url, {
@@ -17,6 +21,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
+      log.error({ status: res.status }, "Search service unavailable");
       return Response.json({ results: [], error: "搜索服务暂不可用" });
     }
 
@@ -30,8 +35,12 @@ export async function POST(req: NextRequest) {
       })
     );
 
+    endLog(200, { resultCount: results.length });
+    writeAuditLog({ event: "search_complete", route: "/api/search", method: "POST", status: 200, detail: { query, resultCount: results.length } });
     return Response.json({ results });
-  } catch {
+  } catch (err) {
+    endLog(500);
+    writeAuditLog({ event: "search_error", route: "/api/search", status: 500, detail: { query, error: String(err) } });
     return Response.json({ results: [], error: "搜索服务暂不可用" });
   }
 }

@@ -1,19 +1,24 @@
 import { NextRequest } from "next/server";
+import { apiLogger } from "@/lib/logger";
 
 // POST /api/asr — returns ASR config for the client to connect directly via WebSocket
 // The client establishes a WebSocket connection to DashScope directly from the browser
 // This route just provides the authenticated config
 
+const log = apiLogger("asr");
+
 export async function GET() {
   const apiKey = process.env.DASHSCOPE_API_KEY;
 
   if (!apiKey) {
+    log.error("DASHSCOPE_API_KEY not configured");
     return new Response(JSON.stringify({ error: "DASHSCOPE_API_KEY not configured" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  log.info("ASR config requested");
   return new Response(
     JSON.stringify({
       wsUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
@@ -29,12 +34,14 @@ export async function POST(req: NextRequest) {
   const apiKey = process.env.DASHSCOPE_API_KEY;
 
   if (!apiKey) {
+    log.error("DASHSCOPE_API_KEY not configured");
     return new Response(JSON.stringify({ error: "DASHSCOPE_API_KEY not configured" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  log.info("ASR proxy request received");
   const body = await req.json();
 
   const res = await fetch("https://dashscope.aliyuncs.com/api/v1/services/audio/asr/realtime", {

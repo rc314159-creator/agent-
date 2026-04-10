@@ -2,7 +2,7 @@
 
 > 本文件是知识库的**唯一入口**。Agent 和开发者都从这里开始导航。
 >
-> 最后更新: 2026-04-10 (ai-core-rebuild — 全部功能点完成，v2.0-ai-core)
+> 最后更新: 2026-04-10 (v2.1-enhancement — 统一 AI 面板 + ToolCallDisplay + pino 日志 + CopilotKit + E2E)
 
 ---
 
@@ -37,6 +37,7 @@
 
 - [2026.04.09 MeetFlow 群面记录助手](开发计划/2026.04.09/meetflow-群面记录助手.md) — 状态: 已批准 / 执行: 已完成 (v1.0-stable)
 - [2026.04.10 项目管理功能](开发计划/2026.04.10/项目管理.md) — 状态: 已完成 (v1.2-project-mgmt) / 数据持久化 + 项目隔离 + 左侧面板
+- [2026.04.10 MeetFlow v2.1 增强](开发计划/2026.04.10/v2.1-enhancement.md) — 状态: 进行中 / 统一 AI 面板 + ToolCallDisplay + pino 日志 + CopilotKit + E2E
 
 ## 修复历史
 

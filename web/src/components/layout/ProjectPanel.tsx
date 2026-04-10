@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -11,8 +10,20 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Clock,
 } from "lucide-react";
 import { useProject } from "@/hooks/useProject";
+import { toast } from "sonner";
+
+function formatTimestamp() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  return `新项目 ${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
 
 export function ProjectPanel() {
   const {
@@ -24,16 +35,12 @@ export function ProjectPanel() {
     deleteProject,
   } = useProject();
   const [collapsed, setCollapsed] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [showInput, setShowInput] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const handleCreate = useCallback(async () => {
-    const name = newName.trim() || `项目 ${projects.length + 1}`;
+    const name = formatTimestamp();
     await createProject(name);
-    setNewName("");
-    setShowInput(false);
-  }, [newName, projects.length, createProject]);
+  }, [createProject]);
 
   const handleDelete = useCallback(
     async (id: string, e: React.MouseEvent) => {
@@ -77,10 +84,24 @@ export function ProjectPanel() {
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            onClick={() => setShowInput(true)}
+            onClick={() => toast.info("历史记录功能开发中")}
+            title="历史记录"
+          >
+            <Clock className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={handleCreate}
+            disabled={creating}
             title="新建项目"
           >
-            <Plus className="w-3.5 h-3.5" />
+            {creating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
           </Button>
           <Button
             variant="ghost"
@@ -93,58 +114,10 @@ export function ProjectPanel() {
         </div>
       </div>
 
-      {/* New project input */}
-      <AnimatePresence>
-        {showInput && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="border-b border-border/30 overflow-hidden"
-          >
-            <div className="p-2 space-y-1.5">
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCreate();
-                  if (e.key === "Escape") setShowInput(false);
-                }}
-                placeholder="项目名称..."
-                className="w-full text-xs bg-muted/30 border border-border/40 rounded-md px-2 py-1.5 outline-none focus:ring-1 focus:ring-violet-500/40"
-              />
-              <div className="flex gap-1">
-                <Button
-                  size="sm"
-                  className="flex-1 h-6 text-[10px] bg-violet-600 hover:bg-violet-700"
-                  onClick={handleCreate}
-                  disabled={creating}
-                >
-                  {creating ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    "创建"
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 text-[10px]"
-                  onClick={() => setShowInput(false)}
-                >
-                  取消
-                </Button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Project list */}
       <ScrollArea className="flex-1">
         <div className="p-1.5 space-y-0.5">
-          {projects.length === 0 && !showInput && (
+          {projects.length === 0 && (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <FolderOpen className="w-8 h-8 mb-2 opacity-30" />
               <p className="text-xs">暂无项目</p>
@@ -152,7 +125,8 @@ export function ProjectPanel() {
                 variant="ghost"
                 size="sm"
                 className="mt-2 text-xs gap-1 text-violet-400"
-                onClick={() => setShowInput(true)}
+                onClick={handleCreate}
+                disabled={creating}
               >
                 <Plus className="w-3 h-3" />
                 新建项目
