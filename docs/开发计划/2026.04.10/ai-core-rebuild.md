@@ -320,6 +320,12 @@ MeetFlow v1.3 虽然已完成基础 UI 和 Mock 数据清除，但 AI 层存在�
 
 ---
 
+## 已知问题 / 后续迭代项
+
+| 问题 | 描述 | 严重性 |
+|------|------|--------|
+| TemplateEditor 内容不恢复 | 切换回已编辑的模板时，`contentEditable` 单元格显示静态默认文案，不还原已保存内容。数据持久化逻辑正确，仅 UI 展示层未从 `currentProject.templates.data[templateId]` 注入保存的 HTML。 | 非阻塞，后续迭代修复 |
+
 ## 风险与回滚
 
 | 功能点 | 风险 | 回滚方案 |
