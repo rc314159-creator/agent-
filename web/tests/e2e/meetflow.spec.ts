@@ -26,12 +26,8 @@ test.describe('MeetFlow v2.1', () => {
   });
 
   test('统一 AI 面板 — 四个 Tab', async ({ page }) => {
-    // 选择已有项目（第一个）以确保有 currentProjectId
-    await page.locator('nav a, aside li, [class*="project-item"]').first().click().catch(() => {});
-    const firstProject = page.locator('aside button, aside a').first();
-    if (await firstProject.isVisible()) {
-      await firstProject.click();
-    }
+    // 点击第一个项目（产品群面讨论）进入工作区
+    await page.locator('[role="button"]:has-text("产品群面讨论")').first().click();
     await page.waitForTimeout(1000);
 
     // 使用键盘快捷键打开 AI 面板
@@ -39,11 +35,11 @@ test.describe('MeetFlow v2.1', () => {
     await page.waitForTimeout(1000);
     await page.screenshot({ path: '/tmp/e2e-v2.1-03-ai-panel.png', fullPage: true });
 
-    // 验证四个 Tab
-    await expect(page.locator('button:has-text("对话")')).toBeVisible();
-    await expect(page.locator('button:has-text("总结")')).toBeVisible();
-    await expect(page.locator('button:has-text("搜索")')).toBeVisible();
-    await expect(page.locator('button:has-text("自动填充")')).toBeVisible();
+    // 验证四个 Tab（role="tab"）
+    await expect(page.getByRole('tab', { name: '对话' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: '总结' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: '搜索' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: '自动填充' })).toBeVisible();
   });
 
   test('历史记录在项目面板而非 Sidebar', async ({ page }) => {

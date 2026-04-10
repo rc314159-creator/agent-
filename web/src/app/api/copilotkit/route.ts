@@ -18,6 +18,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+
+    // Single-endpoint info probe: CopilotKit sends { method: "info" } to detect transport
+    if (body?.method === "info") {
+      return Response.json({
+        version: "0.0.0-stub",
+        agents: {},
+        actions: [],
+        mode: "default",
+        audioFileTranscriptionEnabled: false,
+        a2uiEnabled: false,
+        openGenerativeUIEnabled: false,
+      });
+    }
+
     // Minimal stub: acknowledge the request so the frontend doesn't error
     return new Response(
       JSON.stringify({
