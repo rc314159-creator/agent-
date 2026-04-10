@@ -47,29 +47,7 @@ const quickActions = [
   },
 ];
 
-const mockResponses: Record<string, string> = {
-  总结:
-    "## 讨论要点总结\n\n**核心问题**: 协同办公工具存在平台切换成本高、学习门槛高、移动端体验差三大痛点。\n\n**产品定位**: 面向Z世代职场人的轻量化智能协作助手。\n\n**关键策略**:\n1. 轻量化 + 移动优先\n2. AI 增强核心功能\n3. Freemium 商业模式\n\n**竞品差异化**: 相比飞书更轻量、相比 Notion 学习成本更低、相比钉钉更年轻化。",
-  搜索:
-    "为您找到以下相关资讯：\n\n1. **艾瑞咨询 2026 协同办公报告** — 市场规模达 680 亿元，移动办公占比 67%\n2. **36氪 Z世代调查** — 73% 偏好轻量化工具，AI 辅助是第二关注点\n3. **飞书 2026 数据** — 企业版用户 800 万，但移动端日均时长仅桌面端 1/3",
-  填充:
-    "已根据转录内容分析，建议补充以下内容到画布：\n\n1. **用户痛点细化**: Speaker C 提到竞品调研数据可以补充到竞品分析表\n2. **策略补充**: Speaker D 关于 AI 弥补功能缺失的观点可以展开\n3. **行动项**: 需要明确每项任务的负责人和时间节点",
-  竞品:
-    "## 竞品分析\n\n| 产品 | 优势 | 劣势 | 定位 |\n|------|------|------|------|\n| 飞书 | 功能全、生态好 | 重、移动端差 | 企业全功能 |\n| Notion | 灵活、颜值高 | 学习成本高 | 个人/团队知识库 |\n| 钉钉 | 覆盖广 | 体验老旧 | 中大型企业 |\n| Midflow | 轻量、AI原生 | 生态待建立 | Z世代协作 |\n\n**差异化机会**: 在轻量化与 AI 增强的结合点上，目前市场存在明显空白。",
-  用户画像:
-    "## 目标用户画像\n\n**主要画像**: 职场新人 Lily\n- 年龄：22-28岁，Z世代\n- 职业：产品/运营/设计等创意岗位\n- 痛点：工具太多、切换成本高、AI 功能散乱\n- 期望：一个轻量、智能、好用的协作工具\n\n**次要画像**: 创业团队 Leader\n- 年龄：28-35岁\n- 需求：快速协作、AI 辅助决策\n- 预算敏感，注重ROI",
-  MVP:
-    "## MVP 功能建议\n\n**必做（核心）**:\n1. 语音实时转录 + AI 总结\n2. 轻量画布/白板\n3. AI 对话助手\n\n**可选（差异化）**:\n4. 移动端优先设计\n5. 一键生成会议纪要\n\n**暂缓（后期）**:\n6. 第三方集成\n7. 企业版权限管理\n\n建议以 8 周为 MVP 周期，先验证核心价值假设。",
-};
-
 const MAX_CHARS = 500;
-
-function getAIResponse(input: string): string {
-  for (const [key, value] of Object.entries(mockResponses)) {
-    if (input.includes(key)) return value;
-  }
-  return `好的，关于你的问题"${input.slice(0, 30)}..."，我的分析如下：\n\n根据当前讨论的上下文，建议你们重点关注以下几个方面：\n\n1. **目标用户验证** — 需要进一步确认 Z 世代是否真的是最优目标群体\n2. **技术可行性** — AI 增强方案的具体实现路径需要明确\n3. **MVP 优先级** — 建议先做最核心的 3 个功能进行验证\n\n需要我进一步展开哪个方面？`;
-}
 
 const WELCOME_MSG: Message = {
   id: "welcome",
@@ -92,58 +70,22 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
-  const streamRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Auto-scroll to bottom
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const startStreamingResponse = useCallback((fullText: string) => {
-    const msgId = (Date.now() + 1).toString();
-    const newMsg: Message = {
-      id: msgId,
-      role: "assistant",
-      content: fullText,
-      displayContent: "",
-      timestamp: new Date(),
-      streaming: true,
-    };
-    setMessages((prev) => [...prev, newMsg]);
-    setIsTyping(false);
-
-    let charIndex = 0;
-    const CHUNK = 3; // chars per tick for smooth speed
-
-    streamRef.current = setInterval(() => {
-      charIndex = Math.min(charIndex + CHUNK, fullText.length);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId
-            ? {
-                ...m,
-                displayContent: fullText.slice(0, charIndex),
-                streaming: charIndex < fullText.length,
-              }
-            : m
-        )
-      );
-      if (charIndex >= fullText.length) {
-        clearInterval(streamRef.current!);
-        streamRef.current = null;
-      }
-    }, 16); // ~60fps
-  }, []);
+  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if (!text.trim() || isTyping) return;
 
       // Cancel any ongoing stream
-      if (streamRef.current) {
-        clearInterval(streamRef.current);
-        streamRef.current = null;
-        // Finalize last streaming message
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
         setMessages((prev) =>
           prev.map((m) =>
             m.streaming ? { ...m, displayContent: m.content, streaming: false } : m
@@ -162,18 +104,108 @@ export function AIChatSidebar({ open, onClose }: AIChatSidebarProps) {
       setInput("");
       setIsTyping(true);
 
-      const delay = 600 + Math.random() * 800;
-      setTimeout(() => {
-        startStreamingResponse(getAIResponse(text));
-      }, delay);
+      const msgId = (Date.now() + 1).toString();
+      const assistantMsg: Message = {
+        id: msgId,
+        role: "assistant",
+        content: "",
+        displayContent: "",
+        timestamp: new Date(),
+        streaming: true,
+      };
+
+      // Build conversation history for API
+      const apiMessages = messages
+        .filter((m) => m.id !== "welcome")
+        .map((m) => ({ role: m.role, content: m.content }));
+      apiMessages.push({ role: "user", content: text.trim() });
+
+      try {
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        const res = await fetch("/api/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: apiMessages, stream: true }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errData = await res.text();
+          setIsTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            { ...assistantMsg, content: `API 错误: ${errData}`, displayContent: `API 错误: ${errData}`, streaming: false },
+          ]);
+          return;
+        }
+
+        setIsTyping(false);
+        setMessages((prev) => [...prev, assistantMsg]);
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split("\n");
+
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const data = line.slice(6);
+                if (data === "[DONE]") break;
+                try {
+                  const parsed = JSON.parse(data);
+                  const delta = parsed.choices?.[0]?.delta?.content;
+                  if (delta) {
+                    accumulated += delta;
+                    const current = accumulated;
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === msgId
+                          ? { ...m, content: current, displayContent: current }
+                          : m
+                      )
+                    );
+                  }
+                } catch {
+                  // skip malformed SSE lines
+                }
+              }
+            }
+          }
+        }
+
+        // Finalize
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId ? { ...m, streaming: false } : m
+          )
+        );
+        abortRef.current = null;
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          setIsTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            { ...assistantMsg, content: `连接失败: ${(err as Error).message}`, displayContent: `连接失败: ${(err as Error).message}`, streaming: false },
+          ]);
+        }
+      }
     },
-    [isTyping, startStreamingResponse]
+    [isTyping, messages]
   );
 
   const handleClearChat = useCallback(() => {
-    if (streamRef.current) {
-      clearInterval(streamRef.current);
-      streamRef.current = null;
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
     }
     setMessages([WELCOME_MSG]);
     setIsTyping(false);

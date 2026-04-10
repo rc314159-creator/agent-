@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,9 +20,7 @@ import {
 } from "lucide-react";
 import { useAIToggle } from "@/hooks/useAIToggle";
 import {
-  mockSummary,
   mockSearchResults,
-  mockChatMessages,
 } from "@/lib/mock-data";
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -31,22 +29,104 @@ export function AIPanel() {
   const { aiEnabled } = useAIToggle();
   const [expanded, setExpanded] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>(mockChatMessages as ChatMsg[]);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredResults, setFilteredResults] = useState(mockSearchResults);
   const [autoFillDone, setAutoFillDone] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const chatMessagesRef = useRef<ChatMsg[]>([]);
 
-  const handleChatSend = useCallback(() => {
-    if (!chatInput.trim()) return;
+  const handleGenerateSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    setSummaryText("");
+    try {
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "请根据当前的讨论内容，生成一份结构化的会议总结报告" }],
+          stream: false,
+        }),
+      });
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content ?? "";
+      setSummaryText(content);
+    } catch {
+      setSummaryText("生成失败，请重试。");
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
+
+  const handleChatSend = useCallback(async () => {
+    if (!chatInput.trim() || chatLoading) return;
     const userMsg: ChatMsg = { role: "user", content: chatInput.trim() };
-    setChatMessages((prev) => [...prev, userMsg]);
+    const updatedMessages = [...chatMessagesRef.current, userMsg];
+    chatMessagesRef.current = updatedMessages;
+    setChatMessages([...updatedMessages]);
     setChatInput("");
-    setTimeout(() => {
-      const aiMsg: ChatMsg = { role: "assistant", content: "这是一个很好的问题。根据当前画布内容和讨论记录，我建议从用户需求出发，优先关注核心差异化功能点。具体来说：\n\n1. **AI 辅助记录**是最大的差异化优势\n2. 轻量化设计降低用户迁移成本\n3. 模板系统提升开箱即用体验" };
-      setChatMessages((prev) => [...prev, aiMsg]);
-    }, 800);
-  }, [chatInput]);
+    setChatLoading(true);
+
+    const assistantMsg: ChatMsg = { role: "assistant", content: "" };
+    chatMessagesRef.current = [...updatedMessages, assistantMsg];
+    setChatMessages([...chatMessagesRef.current]);
+
+    try {
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          stream: true,
+        }),
+      });
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) throw new Error("No response body");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                const last = chatMessagesRef.current[chatMessagesRef.current.length - 1];
+                const updated = { ...last, content: last.content + delta };
+                chatMessagesRef.current = [
+                  ...chatMessagesRef.current.slice(0, -1),
+                  updated,
+                ];
+                setChatMessages([...chatMessagesRef.current]);
+              }
+            } catch {
+              // ignore malformed SSE lines
+            }
+          }
+        }
+      }
+    } catch {
+      const last = chatMessagesRef.current[chatMessagesRef.current.length - 1];
+      const updated = { ...last, content: "请求失败，请重试。" };
+      chatMessagesRef.current = [
+        ...chatMessagesRef.current.slice(0, -1),
+        updated,
+      ];
+      setChatMessages([...chatMessagesRef.current]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [chatInput, chatLoading]);
 
   const handleSearch = useCallback(() => {
     if (!searchQuery.trim()) {
@@ -122,13 +202,21 @@ export function AIPanel() {
                   <Button
                     size="sm"
                     className="mb-3 gap-1.5 bg-violet-600 hover:bg-violet-700"
+                    onClick={handleGenerateSummary}
+                    disabled={summaryLoading}
                   >
-                    <Sparkles className="w-3 h-3" />
-                    生成总结
+                    {summaryLoading ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3 h-3" />
+                    )}
+                    {summaryLoading ? "生成中..." : "生成总结"}
                   </Button>
-                  <div className="text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
-                    {mockSummary}
-                  </div>
+                  {summaryText && (
+                    <div className="text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
+                      {summaryText}
+                    </div>
+                  )}
                 </div>
               </ScrollArea>
             </TabsContent>
@@ -194,9 +282,10 @@ export function AIPanel() {
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChatSend(); } }}
                   placeholder="基于画布和转录内容提问..."
                   className="h-8 min-h-8 text-xs resize-none"
+                  disabled={chatLoading}
                 />
-                <Button size="icon" className="h-8 w-8 shrink-0" onClick={handleChatSend}>
-                  <Send className="w-3 h-3" />
+                <Button size="icon" className="h-8 w-8 shrink-0" onClick={handleChatSend} disabled={chatLoading}>
+                  {chatLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                 </Button>
               </div>
             </TabsContent>

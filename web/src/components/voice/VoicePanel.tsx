@@ -23,6 +23,7 @@ const speakerColors: Record<string, string> = {
   "Speaker B": "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
   "Speaker C": "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Speaker D": "bg-pink-500/20 text-pink-300 border-pink-500/30",
+  "Speaker": "bg-violet-500/20 text-violet-300 border-violet-500/30",
 };
 
 // Pre-computed sine-wave heights — stable across renders, no Math.random()
@@ -40,9 +41,47 @@ function formatTimer(seconds: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function formatTimestamp(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+interface TranscriptItem {
+  id: number;
+  speaker: string;
+  text: string;
+  time: string;
+}
+
 interface VoicePanelProps {
   width: number;
   onWidthChange: (w: number) => void;
+}
+
+// Resample Float32 audio to 16kHz PCM Int16 and return as base64
+function resampleAndEncode(
+  inputData: Float32Array,
+  inputSampleRate: number
+): string {
+  const outputSampleRate = 16000;
+  const ratio = inputSampleRate / outputSampleRate;
+  const outputLength = Math.round(inputData.length / ratio);
+  const pcm = new Int16Array(outputLength);
+
+  for (let i = 0; i < outputLength; i++) {
+    const srcIndex = Math.min(Math.round(i * ratio), inputData.length - 1);
+    const sample = Math.max(-1, Math.min(1, inputData[srcIndex]));
+    pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+
+  // Convert Int16Array to base64
+  const bytes = new Uint8Array(pcm.buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
@@ -52,11 +91,27 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  // Show mock transcripts initially; replaced by live transcripts once recording starts
+  const [transcripts, setTranscripts] = useState<TranscriptItem[]>(mockTranscripts);
+  const [isLive, setIsLive] = useState(false);
   const { aiEnabled } = useAIToggle();
   const dragStartX = useRef<number | null>(null);
   const dragStartWidth = useRef<number>(width);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ASR refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const transcriptIdRef = useRef(1);
+  const elapsedRef = useRef(0);
+
+  // Keep elapsedRef in sync for use in audio callbacks
+  useEffect(() => {
+    elapsedRef.current = elapsed;
+  }, [elapsed]);
 
   // Live timer
   useEffect(() => {
@@ -70,10 +125,10 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
     };
   }, [isRecording]);
 
-  // Auto-scroll to bottom when recording starts (simulating new items)
+  // Auto-scroll to bottom when new transcripts arrive
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [isRecording]);
+  }, [transcripts]);
 
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
@@ -98,10 +153,142 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
     [width, onWidthChange]
   );
 
+  const stopRecording = useCallback(() => {
+    // Stop audio processing
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    // Close WebSocket
+    if (wsRef.current) {
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+      wsRef.current = null;
+    }
+    setIsRecording(false);
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    try {
+      // Fetch ASR config
+      const res = await fetch("/api/asr");
+      if (!res.ok) throw new Error("Failed to fetch ASR config");
+      const { wsUrl, apiKey, model } = await res.json();
+
+      // Get microphone
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Set up AudioContext for PCM capture
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+
+      // ScriptProcessorNode: 4096 samples, mono
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      // Connect WebSocket
+      const ws = new WebSocket(`${wsUrl}?authorization=${encodeURIComponent(`Bearer ${apiKey}`)}&OpenAI-Beta=realtime%3Dv1`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        // Send session.update
+        ws.send(
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              model,
+              input_audio_format: "pcm16",
+              turn_detection: { type: "server_vad" },
+            },
+          })
+        );
+
+        // Now start processing audio
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+          const type: string = msg.type ?? "";
+
+          let text: string | null = null;
+
+          if (type === "conversation.item.input_audio_transcription.completed") {
+            text = msg.transcript ?? null;
+          } else if (type === "response.audio_transcript.delta") {
+            text = msg.delta ?? null;
+          }
+
+          if (text && text.trim()) {
+            const item: TranscriptItem = {
+              id: transcriptIdRef.current++,
+              speaker: "Speaker",
+              text: text.trim(),
+              time: formatTimestamp(elapsedRef.current),
+            };
+            setTranscripts((prev) => [...prev, item]);
+          }
+        } catch {
+          // non-JSON message, ignore
+        }
+      };
+
+      ws.onerror = () => {
+        stopRecording();
+      };
+
+      ws.onclose = () => {
+        // Cleanup if closed unexpectedly while recording
+        if (isRecording) {
+          stopRecording();
+        }
+      };
+
+      // Send audio chunks via ScriptProcessorNode
+      processor.onaudioprocess = (e) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        const channelData = e.inputBuffer.getChannelData(0);
+        const base64 = resampleAndEncode(channelData, audioContext.sampleRate);
+        wsRef.current.send(
+          JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: base64,
+          })
+        );
+      };
+
+      // Switch to live mode: clear mock transcripts, reset timer
+      setTranscripts([]);
+      setIsLive(true);
+      setElapsed(0);
+      transcriptIdRef.current = 1;
+      setIsRecording(true);
+    } catch {
+      // If anything fails, ensure clean state
+      stopRecording();
+    }
+  }, [stopRecording, isRecording]);
+
   const handleToggleRecording = useCallback(() => {
-    if (!isRecording) setElapsed(0);
-    setIsRecording((v) => !v);
-  }, [isRecording]);
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }, [isRecording, startRecording, stopRecording]);
 
   const handleCopyItem = useCallback(async (id: number, text: string) => {
     try {
@@ -114,7 +301,7 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
   }, []);
 
   const handleCopyAll = useCallback(async () => {
-    const allText = mockTranscripts
+    const allText = transcripts
       .map((t) => `[${t.speaker}] ${t.time}\n${t.text}`)
       .join("\n\n");
     try {
@@ -124,7 +311,7 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
     } catch {
       // clipboard unavailable
     }
-  }, []);
+  }, [transcripts]);
 
   if (collapsed) {
     return (
@@ -234,12 +421,12 @@ export function VoicePanel({ width, onWidthChange }: VoicePanelProps) {
         {/* Transcript list */}
         <ScrollArea className="flex-1 min-h-0">
           <div className="p-3 space-y-2">
-            {mockTranscripts.map((item, index) => (
+            {transcripts.map((item, index) => (
               <motion.div
                 key={item.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.04, duration: 0.2, ease: "easeOut" }}
+                transition={{ delay: isLive ? 0 : index * 0.04, duration: 0.2, ease: "easeOut" }}
                 className="group p-2.5 rounded-lg hover:bg-muted/30 transition-colors"
               >
                 <div className="flex items-center gap-2 mb-1">
