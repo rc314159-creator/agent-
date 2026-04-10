@@ -63,6 +63,7 @@ export function MindMapEditor() {
   const { currentProject, saveField } = useProject();
   const { setMindmapText } = useWorkspace();
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
     let instance: any = null;
@@ -96,7 +97,9 @@ export function MindMapEditor() {
         mindMapRef.current = instance;
 
         // Listen to data changes for persistence
+        unmountedRef.current = false;
         instance.on("data_change", (data: unknown) => {
+          if (unmountedRef.current) return; // Skip saves during/after unmount
           // Extract text labels for workspace context
           function extractText(node: any): string[] {
             const texts: string[] = [];
@@ -112,7 +115,7 @@ export function MindMapEditor() {
           // Debounced save to project
           if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
           saveTimeoutRef.current = setTimeout(() => {
-            saveField("mindmap", data);
+            if (!unmountedRef.current) saveField("mindmap", data);
           }, 500);
         });
 
@@ -129,6 +132,7 @@ export function MindMapEditor() {
     init();
 
     return () => {
+      unmountedRef.current = true;
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       if (instance) {
         try {
