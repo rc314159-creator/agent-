@@ -3,3 +3,9 @@ uvicorn[standard]==0.32.1
 speechbrain==1.0.2
 soundfile==0.12.1
 numpy==1.26.4
+# speechbrain 1.0.2 的 setup.py 漏写了这些传递依赖, 必须显式装
+requests==2.32.3
+hyperpyyaml==1.2.2
+# speechbrain 1.0.2 内部仍用 huggingface_hub 旧版 use_auth_token API,
+# 0.26+ 已删该参数. pin 到 0.24.x 保兼容
+huggingface_hub==0.24.7
