@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+/test-results/
+/screenshots/
+/tests/
 
 # next.js
 /.next/
@@ -42,3 +45,8 @@ next-env.d.ts
 
 # project data (runtime persistence)
 /data/
+
+# local verification artifacts
+*.png
+*.webm
+*.zip

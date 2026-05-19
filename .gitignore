@@ -26,6 +26,8 @@ etc/config.yaml
 .pytest_cache/
 htmlcov/
 .coverage
+tests/
+web/tests/
 
 # Logs
 *.log
