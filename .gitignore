@@ -44,3 +44,9 @@ web/screenshots/
 .playwright-mcp/
 test-results/
 web/test-results/
+
+# Voiceprint MVP data (SQLite + audio segments)
+data/vp.db
+data/vp.db-shm
+data/vp.db-wal
+data/segments/
