@@ -1,0 +1,20 @@
+# Voiceprint meeting recorder — docker compose.
+# voiceprint-service is the only containerized piece; the Next.js app and
+# the ASR proxy run on the host via `npm run dev` / `npm run asr-proxy` so
+# microphone access (which requires the browser to talk to localhost) is
+# not gated by container networking.
+
+services:
+  voiceprint-service:
+    build: ./voiceprint-service
+    image: voiceprint-service:mvp
+    container_name: voiceprint-service
+    restart: unless-stopped
+    ports:
+      - "4929:4929"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4929/health',timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
