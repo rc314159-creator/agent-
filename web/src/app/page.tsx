@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Mic, Square, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Mic, Square, Loader2, AlertTriangle, Check } from "lucide-react";
+import { concatChunks, resampleToInt16, encodeWav, int16ToBase64 } from "@/lib/wav";
 
 interface LiveLine {
   id: string;
@@ -10,8 +12,15 @@ interface LiveLine {
   text: string;
   confidence: number;
   needsReview: boolean;
+  isNewSpeaker: boolean;
   status: "live" | "embedding" | "matched" | "error";
   startMs: number;
+  utteranceId?: string;
+}
+
+interface OtherSpeaker {
+  id: string;
+  name: string;
 }
 
 const SPEAKER_COLORS = [
@@ -25,7 +34,9 @@ const SPEAKER_COLORS = [
   "bg-lime-500/15 text-lime-300 border-lime-500/30",
 ];
 
-function speakerColorFor(map: Map<string, number>, speakerId: string | null): string {
+function speakerColorFor(map: Map<string, number>, speakerId: string | null, status: string): string {
+  if (status === "live") return "bg-slate-500/15 text-slate-300 border-slate-500/30";
+  if (status === "embedding") return "bg-slate-500/15 text-slate-400 border-slate-500/30";
   if (!speakerId) return "bg-slate-500/15 text-slate-300 border-slate-500/30";
   if (!map.has(speakerId)) map.set(speakerId, map.size);
   return SPEAKER_COLORS[map.get(speakerId)! % SPEAKER_COLORS.length];
@@ -45,20 +56,58 @@ export default function RecorderPage() {
   const [elapsed, setElapsed] = useState(0);
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [status, setStatus] = useState<string>("");
+  const [vpHealthy, setVpHealthy] = useState<boolean | null>(null);
+  const [others, setOthers] = useState<OtherSpeaker[]>([]);
   const colorMapRef = useRef(new Map<string, number>());
 
-  // Refs for runtime state read by audio callbacks
-  const elapsedRef = useRef(0);
-  useEffect(() => {
-    elapsedRef.current = elapsed;
-  }, [elapsed]);
-
+  // ---- refs read by audio callbacks ----
+  const recordingStartRef = useRef<number>(0);
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveBubbleRef = useRef<string | null>(null);
+
+  // PCM buffer + segment slicing state
+  const pcmChunksRef = useRef<Float32Array[]>([]);
+  const pcmSampleRateRef = useRef<number>(16000);
+  const segStartChunkRef = useRef(0); // chunk index at which the current segment started
+  const segStartMsRef = useRef(0); // ms relative to recording start
+  const liveFinalizedRef = useRef(""); // ASR text accumulated for the current live bubble
+  const meetingIdRef = useRef<string | null>(null);
+  const autoModeRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    meetingIdRef.current = meetingId;
+  }, [meetingId]);
+  useEffect(() => {
+    autoModeRef.current = autoMode;
+  }, [autoMode]);
+
+  // Voiceprint service health check
+  useEffect(() => {
+    fetch("/api/voiceprint-health")
+      .then((r) => r.json())
+      .then((d) => setVpHealthy(!!d.ok))
+      .catch(() => setVpHealthy(false));
+  }, []);
+
+  // Load other speakers list (for "move to" dropdown on needs-review items)
+  const loadOthers = useCallback(async () => {
+    try {
+      const res = await fetch("/api/speakers");
+      const data = await res.json();
+      setOthers(
+        (data.speakers ?? []).map((s: { id: string; name: string }) => ({ id: s.id, name: s.name })),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    loadOthers();
+  }, [loadOthers]);
 
   // Live timer
   useEffect(() => {
@@ -72,7 +121,8 @@ export default function RecorderPage() {
     };
   }, [recording]);
 
-  const writeLive = useCallback((text: string) => {
+  // Write/extend the current live ("讲话中") bubble.
+  const writeLive = useCallback((text: string, startMs: number) => {
     if (!text.trim()) return;
     setLines((prev) => {
       const liveId = liveBubbleRef.current;
@@ -90,12 +140,110 @@ export default function RecorderPage() {
           text,
           confidence: 0,
           needsReview: false,
-          status: "live" as const,
-          startMs: elapsedRef.current * 1000,
+          isNewSpeaker: false,
+          status: "live",
+          startMs,
         },
       ];
     });
   }, []);
+
+  // Close out the live bubble, replace with an "embedding..." placeholder
+  // tied to a specific bubbleId, then async POST to /api/utterances/ingest.
+  const flushSegment = useCallback(
+    async (text: string, segStart: number, segEnd: number) => {
+      const meeting = meetingIdRef.current;
+      if (!meeting) return;
+      const chunks = pcmChunksRef.current;
+      const sr = pcmSampleRateRef.current;
+      const startIdx = segStartChunkRef.current;
+      const endIdx = chunks.length;
+      segStartChunkRef.current = endIdx;
+      const slice = chunks.slice(startIdx, endIdx);
+      if (slice.length === 0) return;
+      const segPcm = concatChunks(slice);
+      const segMs = Math.floor((segPcm.length / sr) * 1000);
+      if (segMs < 300) {
+        // too short, drop
+        return;
+      }
+
+      const pcm16 = resampleToInt16(segPcm, sr, 16000);
+      const wav = encodeWav(pcm16, 16000);
+
+      const placeholderId = `seg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      // Reuse the live bubble id if present so the UI continuity is smooth
+      const liveId = liveBubbleRef.current;
+      liveBubbleRef.current = null;
+      setLines((prev) => {
+        if (liveId) {
+          return prev.map((l) =>
+            l.id === liveId
+              ? { ...l, id: placeholderId, status: "embedding" as const, speakerName: "归属中…", text }
+              : l,
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: placeholderId,
+            speakerId: null,
+            speakerName: "归属中…",
+            text,
+            confidence: 0,
+            needsReview: false,
+            isNewSpeaker: false,
+            status: "embedding",
+            startMs: segStart,
+          },
+        ];
+      });
+
+      try {
+        const params = new URLSearchParams({
+          meetingId: meeting,
+          text,
+          startMs: String(segStart),
+          endMs: String(segEnd),
+        });
+        if (autoModeRef.current) params.set("autoMode", "1");
+        const res = await fetch(`/api/utterances/ingest?${params.toString()}`, {
+          method: "POST",
+          headers: { "Content-Type": "audio/wav" },
+          body: wav,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        setLines((prev) =>
+          prev.map((l) =>
+            l.id === placeholderId
+              ? {
+                  ...l,
+                  speakerId: data.speakerId,
+                  speakerName: data.speakerName,
+                  confidence: data.confidence,
+                  needsReview: !!data.needsReview,
+                  isNewSpeaker: !!data.isNewSpeaker,
+                  status: "matched" as const,
+                  utteranceId: data.utteranceId,
+                }
+              : l,
+          ),
+        );
+        loadOthers();
+      } catch (e) {
+        setLines((prev) =>
+          prev.map((l) =>
+            l.id === placeholderId
+              ? { ...l, speakerName: "归属失败", status: "error" as const }
+              : l,
+          ),
+        );
+        setStatus(`声纹匹配失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [loadOthers],
+  );
 
   const stopRecording = useCallback(async () => {
     if (processorRef.current) {
@@ -115,42 +263,52 @@ export default function RecorderPage() {
       wsRef.current = null;
     }
     setRecording(false);
+    setStatus("已停止。会议已归档, 可到历史会议查看。");
 
-    if (meetingId) {
-      await fetch(`/api/meetings/${meetingId}`, {
+    if (meetingIdRef.current) {
+      await fetch(`/api/meetings/${meetingIdRef.current}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ end: true }),
       }).catch(() => {});
     }
-  }, [meetingId]);
+  }, []);
 
   const startRecording = useCallback(async () => {
+    if (vpHealthy === false) {
+      setStatus("声纹服务未启动 (4929 不可达)。请先 `docker compose up voiceprint-service`。");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setStatus("麦克风不可用");
       return;
     }
+
     setLines([]);
     setElapsed(0);
+    pcmChunksRef.current = [];
+    segStartChunkRef.current = 0;
+    segStartMsRef.current = 0;
+    liveFinalizedRef.current = "";
     liveBubbleRef.current = null;
+    recordingStartRef.current = Date.now();
 
     try {
-      // 1) Create meeting
-      const res = await fetch("/api/meetings", { method: "POST" });
-      const m = await res.json();
+      const mRes = await fetch("/api/meetings", { method: "POST" });
+      const m = await mRes.json();
       setMeetingId(m.id);
-      setStatus(`会议已创建: ${m.title}`);
+      meetingIdRef.current = m.id;
+      setStatus(`录音中: ${m.title}`);
 
-      // 2) Open mic
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
+      pcmSampleRateRef.current = audioCtx.sampleRate;
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
 
-      // 3) Connect ASR proxy via WebSocket
       const asrConfig = await fetch("/api/asr").then((r) => r.json());
       const ws = new WebSocket(asrConfig.wsUrl as string);
       wsRef.current = ws;
@@ -163,6 +321,8 @@ export default function RecorderPage() {
               input_audio_format: "pcm",
               sample_rate: 16000,
               input_audio_transcription: { language: "zh" },
+              // Force 400ms silence as the segment boundary on the ASR side;
+              // each .completed event becomes one ingest call.
               turn_detection: { type: "server_vad", threshold: 0.0, silence_duration_ms: 400 },
             },
           }),
@@ -171,21 +331,33 @@ export default function RecorderPage() {
         processor.connect(audioCtx.destination);
       };
 
-      let liveFinalized = "";
-
-      ws.onmessage = (evt) => {
+      ws.onmessage = async (evt) => {
         try {
           const msg = JSON.parse(evt.data as string);
           const type: string = msg.type ?? "";
+
           if (type === "conversation.item.input_audio_transcription.text") {
             const confirmed: string = msg.text ?? "";
             const stash: string = msg.stash ?? "";
-            writeLive((liveFinalized + confirmed + stash).trim());
+            const t = (liveFinalizedRef.current + confirmed + stash).trim();
+            const startMs = segStartMsRef.current;
+            writeLive(t, startMs);
           } else if (type === "conversation.item.input_audio_transcription.completed") {
-            const t: string = (msg.transcript ?? "").trim();
-            if (t) {
-              liveFinalized = (liveFinalized + t).trim();
-              writeLive(liveFinalized);
+            const piece = (msg.transcript ?? "").trim();
+            if (!piece) return;
+            // Append the new piece to the segment text
+            const fullText = (liveFinalizedRef.current + piece).trim();
+            liveFinalizedRef.current = ""; // reset for next segment
+            const segStart = segStartMsRef.current;
+            const segEnd = Date.now() - recordingStartRef.current;
+            segStartMsRef.current = segEnd;
+            // Fire the async ingest. Errors are surfaced via setLines/status
+            // inside flushSegment, so we don't await it here.
+            void flushSegment(fullText, segStart, segEnd);
+          } else if (type === "input_audio_buffer.speech_started") {
+            // First time speech is detected, anchor segStart to current elapsed
+            if (!liveBubbleRef.current) {
+              segStartMsRef.current = Date.now() - recordingStartRef.current;
             }
           }
         } catch {
@@ -195,37 +367,64 @@ export default function RecorderPage() {
 
       ws.onerror = () => setStatus("语音识别连接异常");
       ws.onclose = () => {
-        /* will be handled by stopRecording */
+        /* recording cleanup handles this */
       };
 
       processor.onaudioprocess = (e) => {
         const ch = e.inputBuffer.getChannelData(0);
+        // Buffer a COPY for downstream segmentation (the audio thread reuses
+        // this Float32 backing buffer across callbacks).
+        pcmChunksRef.current.push(new Float32Array(ch));
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        // Resample to 16kHz PCM Int16 + base64
-        const outRate = 16000;
-        const ratio = audioCtx.sampleRate / outRate;
-        const outLen = Math.round(ch.length / ratio);
-        const pcm = new Int16Array(outLen);
-        for (let i = 0; i < outLen; i++) {
-          const srcIdx = Math.min(Math.round(i * ratio), ch.length - 1);
-          const v = Math.max(-1, Math.min(1, ch[srcIdx]));
-          pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
-        }
-        const bytes = new Uint8Array(pcm.buffer);
-        let bin = "";
-        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        const pcm16 = resampleToInt16(ch, audioCtx.sampleRate, 16000);
         wsRef.current.send(
-          JSON.stringify({ type: "input_audio_buffer.append", audio: btoa(bin) }),
+          JSON.stringify({ type: "input_audio_buffer.append", audio: int16ToBase64(pcm16) }),
         );
       };
 
       setRecording(true);
-      setStatus("录音中…");
     } catch (e) {
       setStatus(`启动失败: ${e instanceof Error ? e.message : String(e)}`);
       stopRecording();
     }
-  }, [stopRecording, writeLive]);
+  }, [flushSegment, stopRecording, vpHealthy, writeLive]);
+
+  // User actions on a needs-review or wrong-speaker line.
+  const moveLine = useCallback(
+    async (line: LiveLine, targetSpeakerId: string) => {
+      if (!line.utteranceId) return;
+      await fetch(`/api/utterances/${line.utteranceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speakerId: targetSpeakerId }),
+      });
+      const target = others.find((o) => o.id === targetSpeakerId);
+      setLines((prev) =>
+        prev.map((l) =>
+          l.id === line.id
+            ? {
+                ...l,
+                speakerId: targetSpeakerId,
+                speakerName: target?.name ?? l.speakerName,
+                needsReview: false,
+              }
+            : l,
+        ),
+      );
+      loadOthers();
+    },
+    [others, loadOthers],
+  );
+
+  const confirmLine = useCallback(async (line: LiveLine) => {
+    if (!line.utteranceId) return;
+    await fetch(`/api/utterances/${line.utteranceId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, needsReview: false } : l)));
+  }, []);
 
   return (
     <div className="max-w-3xl mx-auto p-6">
@@ -255,44 +454,89 @@ export default function RecorderPage() {
             className="accent-violet-500"
           />
           自动模式
-          <span className="text-[10px]">({autoMode ? "懒得选, 全自动" : "中等置信度让我确认"})</span>
         </label>
       </div>
 
+      {vpHealthy === false && (
+        <div className="text-xs text-amber-300 mb-3 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
+          声纹服务未连接 (localhost:4929)。先在终端跑:
+          <code className="ml-1 px-1.5 py-0.5 bg-black/30 rounded">docker compose up -d voiceprint-service</code>
+        </div>
+      )}
       {status && (
-        <div className="text-xs text-muted-foreground mb-4 bg-muted/30 rounded px-3 py-2">
+        <div className="text-xs text-muted-foreground mb-3 bg-muted/30 rounded px-3 py-2">
           {status}
         </div>
       )}
 
       <div className="space-y-2">
         {lines.length === 0 && !recording && (
-          <p className="text-sm text-muted-foreground text-center py-8">点击"开始录音"按钮开始。</p>
+          <p className="text-sm text-muted-foreground text-center py-12">
+            点击 <span className="text-foreground">开始录音</span> 开始。
+            录音结束后可到 <Link href="/voiceprints" className="underline">声纹库</Link> 或{" "}
+            <Link href="/meetings" className="underline">历史会议</Link> 查看。
+          </p>
         )}
-        {lines.map((l) => (
-          <div
-            key={l.id}
-            className={`p-3 rounded-lg border ${
-              l.needsReview ? "border-amber-500/40 bg-amber-500/5" : "border-border/40"
-            }`}
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <span
-                className={`text-[11px] px-2 py-0.5 rounded border ${speakerColorFor(colorMapRef.current, l.speakerId)}`}
-              >
-                {l.speakerName}
-              </span>
-              {l.status === "embedding" && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
-              {l.status === "matched" && l.confidence > 0 && (
-                <span className="text-[10px] text-muted-foreground">匹配 {Math.round(l.confidence * 100)}%</span>
-              )}
-              {l.status === "live" && (
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+        {lines.map((l) => {
+          const showOptions = l.status === "matched" && (l.needsReview || l.isNewSpeaker);
+          return (
+            <div
+              key={l.id}
+              className={`p-3 rounded-lg border ${
+                l.needsReview ? "border-amber-500/40 bg-amber-500/5" : "border-border/40"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <span
+                  className={`text-[11px] px-2 py-0.5 rounded border ${speakerColorFor(colorMapRef.current, l.speakerId, l.status)}`}
+                >
+                  {l.speakerName}
+                </span>
+                {l.status === "embedding" && (
+                  <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                )}
+                {l.needsReview && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+                {l.status === "matched" && l.confidence > 0 && (
+                  <span className="text-[10px] text-muted-foreground">
+                    匹配 {Math.round(l.confidence * 100)}%
+                  </span>
+                )}
+                {l.status === "live" && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                )}
+              </div>
+              <p className="text-sm leading-relaxed">{l.text}</p>
+              {showOptions && (
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  {l.needsReview && (
+                    <button
+                      onClick={() => confirmLine(l)}
+                      className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                    >
+                      <Check className="w-3 h-3" /> 确认
+                    </button>
+                  )}
+                  <select
+                    className="text-xs px-2 py-1 rounded bg-muted/60 border border-border/40 outline-none"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) moveLine(l, e.target.value);
+                    }}
+                  >
+                    <option value="">移到…</option>
+                    {others
+                      .filter((o) => o.id !== l.speakerId)
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
               )}
             </div>
-            <p className="text-sm leading-relaxed">{l.text}</p>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

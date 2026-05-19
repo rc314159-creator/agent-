@@ -9,3 +9,6 @@ hyperpyyaml==1.2.2
 # speechbrain 1.0.2 内部仍用 huggingface_hub 旧版 use_auth_token API,
 # 0.26+ 已删该参数. pin 到 0.24.x 保兼容
 huggingface_hub==0.24.7
+# ruamel.yaml 0.18 引入了 composer.max_depth check 与 hyperpyyaml 1.2 的 Loader
+# 不兼容. pin 0.17.x.
+ruamel.yaml==0.17.40
