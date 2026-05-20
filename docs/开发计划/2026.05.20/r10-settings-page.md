@@ -1,6 +1,6 @@
 ---
 title: R10 — /settings 页 + SQLite settings 表 + agent 配置 UI
-状态: 待实现
+状态: 已完成
 创建日期: 2026-05-20
 ---
 
