@@ -386,6 +386,7 @@ export default function RecorderPage() {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // R7 历史可工作配置：pcm + sample_rate 16000，input_audio_transcription 只含 language
         ws.send(
           JSON.stringify({
             type: "session.update",
@@ -406,14 +407,23 @@ export default function RecorderPage() {
           const msg = JSON.parse(evt.data as string);
           const type: string = msg.type ?? "";
 
-          if (type === "conversation.item.input_audio_transcription.text") {
-            const confirmed: string = msg.text ?? "";
+          // catch-all 日志：每条非 audio 事件都打到 console，方便排查事件名差异
+          if (!type.includes("audio_buffer.append")) {
+            console.log("[ASR]", type, msg);
+          }
+
+          // 实时部分文本（DashScope 用 .text；OpenAI 标准用 .delta；两者都接）
+          if (
+            type === "conversation.item.input_audio_transcription.text" ||
+            type === "conversation.item.input_audio_transcription.delta"
+          ) {
+            const confirmed: string = msg.text ?? msg.delta ?? "";
             const stash: string = msg.stash ?? "";
             const t = (liveFinalizedRef.current + confirmed + stash).trim();
             const startMs = segStartMsRef.current;
-            writeLive(t, startMs);
+            if (t) writeLive(t, startMs);
           } else if (type === "conversation.item.input_audio_transcription.completed") {
-            const piece = (msg.transcript ?? "").trim();
+            const piece = (msg.transcript ?? msg.text ?? "").trim();
             if (!piece) return;
             const fullText = (liveFinalizedRef.current + piece).trim();
             liveFinalizedRef.current = "";
@@ -425,6 +435,10 @@ export default function RecorderPage() {
             if (!liveBubbleRef.current) {
               segStartMsRef.current = Date.now() - recordingStartRef.current;
             }
+          } else if (type === "error") {
+            console.error("[ASR error]", msg);
+            setAsrConn("lost");
+            setAsrConnDetail(`ASR 错误: ${JSON.stringify(msg.error ?? msg).slice(0, 200)}`);
           } else if (type === "proxy.reconnecting") {
             setAsrConn("reconnecting");
             setAsrConnDetail(`正在重连 ASR (第 ${msg.attempt} 次，${msg.delayMs}ms 后)…`);
@@ -435,8 +449,8 @@ export default function RecorderPage() {
             setAsrConn("lost");
             setAsrConnDetail(msg.message ?? "ASR 上游多次重连失败，请停止录音后刷新页面重启");
           }
-        } catch {
-          /* ignore */
+        } catch (e) {
+          console.error("[ASR msg parse error]", e, evt.data);
         }
       };
 

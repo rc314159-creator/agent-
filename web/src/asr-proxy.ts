@@ -109,13 +109,18 @@ wss.on('connection', (client) => {
 
     us.on('message', (data, isBinary) => {
       const raw = data.toString();
-      if (raw.length < 2048) {
+      if (raw.length < 4096) {
         try {
           const parsed = JSON.parse(raw);
-          if (parsed?.type === 'error') {
+          const t = parsed?.type;
+          if (t === 'error') {
             log('error', 'dashscope error event', { cid, error: parsed.error });
-          } else if (parsed?.type === 'session.created' || parsed?.type === 'session.updated') {
-            log('info', `dashscope ${parsed.type}`, { cid, model: parsed.session?.model });
+          } else if (t === 'session.created' || t === 'session.updated') {
+            log('info', `dashscope ${t}`, { cid, model: parsed.session?.model });
+          } else if (typeof t === 'string') {
+            // verbose: log all non-audio control events so we can see real event names
+            const preview = (parsed.text ?? parsed.transcript ?? parsed.delta ?? '').toString().slice(0, 80);
+            log('info', `dashscope evt ${t}`, { cid, ...(preview ? { preview } : {}) });
           }
         } catch { /* not JSON */ }
       }
@@ -166,6 +171,10 @@ wss.on('connection', (client) => {
   }
 
   // Client → upstream relay. Save session.update so we can replay on reconnect.
+  // 加流量统计：每 50 条 audio append 汇报一次，便于排查"PCM 没到 DashScope"
+  let audioAppendCount = 0;
+  let bytesSent = 0;
+  let lastReportAt = Date.now();
   client.on('message', (data, isBinary) => {
     const buf = data as Buffer;
 
@@ -176,6 +185,22 @@ wss.on('connection', (client) => {
           const parsed = JSON.parse(raw);
           if (parsed?.type === 'session.update') {
             lastSessionUpdate = { data: Buffer.from(buf), isBinary };
+            log('info', 'client session.update', { cid, session: parsed.session });
+          } else if (parsed?.type === 'input_audio_buffer.append') {
+            audioAppendCount++;
+            bytesSent += buf.length;
+            const elapsed = Date.now() - lastReportAt;
+            if (audioAppendCount % 50 === 0 || elapsed > 5000) {
+              log('info', 'client → upstream PCM stat', {
+                cid,
+                appendCount: audioAppendCount,
+                bytesSent,
+                upstreamState: upstream?.readyState,
+              });
+              lastReportAt = Date.now();
+            }
+          } else if (parsed?.type) {
+            log('info', `client → upstream ${parsed.type}`, { cid });
           }
         } catch { /* not JSON */ }
       }
@@ -185,7 +210,6 @@ wss.on('connection', (client) => {
       upstream.send(buf, { binary: isBinary });
     } else {
       pendingToUpstream.push({ data: buf, isBinary });
-      // Cap the buffer so a long outage doesn't OOM the proxy.
       if (pendingToUpstream.length > 500) pendingToUpstream.shift();
     }
   });
