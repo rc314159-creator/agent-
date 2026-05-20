@@ -3,7 +3,7 @@ import { getAllSettings, setSetting } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-const KEY_FIELDS = ["anthropic_api_key", "dashscope_api_key"];
+const KEY_FIELDS = ["anthropic_api_key", "dashscope_api_key", "agent_api_key", "asr_api_key"];
 
 function maskValue(key: string, value: string): string {
   if (!KEY_FIELDS.includes(key) || value.length <= 4) return value;

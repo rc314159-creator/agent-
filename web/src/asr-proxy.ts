@@ -1,16 +1,41 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { appendFileSync, mkdirSync } from 'fs';
 import { dirname, resolve } from 'path';
+import Database from 'better-sqlite3';
 
 // DashScope Qwen3-ASR-Flash Realtime
 // IMPORTANT: model MUST be passed as URL query param, not via session.update.
 // If omitted, the server defaults to qwen-omni-turbo-realtime-* and closes the
 // connection with "Model not found". See docs:
 // https://help.aliyun.com/zh/model-studio/qwen-asr-realtime-api/
-const DASHSCOPE_URL =
+const DEFAULT_DASHSCOPE_URL =
   'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime';
-const API_KEY = process.env.DASHSCOPE_API_KEY || 'sk-e2c4923387e147629d69b634dcb9a1a1';
 const PORT = 4928;
+
+function loadSettingsFromDb(): { url: string; apiKey: string } {
+  try {
+    const dbPath = process.env.VOICEPRINT_DB_PATH ?? resolve(process.cwd(), '../data/vp.db');
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const get = (key: string) =>
+      (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+    const url = get('asr_ws_url') ?? DEFAULT_DASHSCOPE_URL;
+    const apiKey =
+      get('asr_api_key') ??
+      get('dashscope_api_key') ??
+      process.env.DASHSCOPE_API_KEY ??
+      'sk-e2c4923387e147629d69b634dcb9a1a1';
+    db.close();
+    return { url, apiKey };
+  } catch {
+    return {
+      url: DEFAULT_DASHSCOPE_URL,
+      apiKey: process.env.DASHSCOPE_API_KEY ?? 'sk-e2c4923387e147629d69b634dcb9a1a1',
+    };
+  }
+}
+
+// Load once at startup; restart the proxy to pick up settings changes.
+const { url: DASHSCOPE_URL, apiKey: API_KEY } = loadSettingsFromDb();
 
 // Log to a file so errors are inspectable after the fact. Writing directly to
 // the same logs/ dir used by the Next.js pino logger keeps everything in one

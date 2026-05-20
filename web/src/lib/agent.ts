@@ -1,6 +1,6 @@
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { getDb, getSetting, getDataDir } from "@/lib/db";
+import { getDb, getSetting, getDataDir, getChatMessages } from "@/lib/db";
 import fs from "node:fs";
 import path from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -8,18 +8,21 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 // ---------- Config helpers ----------
 
 export function getAgentEnv(): Record<string, string | undefined> {
+  // New keys (agent_*) take priority; fallback to old anthropic_* keys for backward compat
   const apiKey =
+    getSetting("agent_api_key") ??
     getSetting("anthropic_api_key") ??
     process.env.ANTHROPIC_API_KEY ??
     process.env.YUNWU_API_KEY;
   const rawBase =
+    getSetting("agent_base_url") ??
     getSetting("anthropic_base_url") ??
     process.env.ANTHROPIC_BASE_URL ??
     (process.env.YUNWU_API_KEY ? process.env.YUNWU_BASE_URL : undefined);
   // SDK spawns claude CLI which appends /v1/messages — strip trailing /v1 to avoid doubling
   const baseURL = rawBase ? rawBase.replace(/\/v1\/?$/, "") : undefined;
 
-  if (!apiKey) throw new Error("未配置 Anthropic API Key，请前往 /settings 配置");
+  if (!apiKey) throw new Error("未配置 API Key，请前往 /settings 配置");
 
   return {
     ...process.env,
@@ -29,7 +32,7 @@ export function getAgentEnv(): Record<string, string | undefined> {
 }
 
 export function getModel(): string {
-  return getSetting("anthropic_model") ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+  return getSetting("agent_model") ?? getSetting("anthropic_model") ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
 }
 
 export function getSystemPrompt(): string {
@@ -47,12 +50,20 @@ export function getSystemPrompt(): string {
 
 // ---------- SQLite tool implementations ----------
 
+function msToHms(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function getMeetingTranscriptImpl(meetingId: string): string {
   const db = getDb();
   const meeting = db.prepare("SELECT * FROM meetings WHERE id = ?").get(meetingId) as {
     id: string; title: string | null; started_at: number; ended_at: number | null;
   } | undefined;
-  if (!meeting) return JSON.stringify({ error: `会议 ${meetingId} 不存在` });
+  if (!meeting) return `错误：会议 ${meetingId} 不存在`;
 
   const utts = db.prepare(`
     SELECT u.text, u.start_ms, u.end_ms, u.confidence, u.needs_review,
@@ -66,17 +77,24 @@ function getMeetingTranscriptImpl(meetingId: string): string {
     confidence: number; needs_review: number; speaker_name: string | null;
   }>;
 
-  return JSON.stringify({
-    meeting: { id: meeting.id, title: meeting.title, startedAt: meeting.started_at, endedAt: meeting.ended_at },
-    utterances: utts.map((u) => ({
-      speaker: u.speaker_name ?? "未知",
-      text: u.text,
-      startMs: u.start_ms,
-      endMs: u.end_ms,
-      confidence: Math.round(u.confidence * 100),
-      needsReview: !!u.needs_review,
-    })),
-  });
+  const title = meeting.title ?? meetingId;
+  const startDate = new Date(meeting.started_at).toLocaleString("zh-CN");
+  const endDate = meeting.ended_at ? new Date(meeting.ended_at).toLocaleString("zh-CN") : "进行中";
+  const speakers = [...new Set(utts.map((u) => u.speaker_name ?? "未知"))].join("、");
+
+  const lines = [
+    `# 会议记录 — ${title}`,
+    "",
+    `**开始时间：** ${startDate}`,
+    `**结束时间：** ${endDate}`,
+    `**参与者：** ${speakers || "（无）"}`,
+    "",
+    "---",
+    "",
+    ...utts.map((u) => `[${u.speaker_name ?? "未知"} ${msToHms(u.start_ms)}] ${u.text}`),
+  ];
+
+  return lines.join("\n");
 }
 
 function listSpeakersImpl(): string {
@@ -266,6 +284,87 @@ export async function* runSummaryAgent(meetingId: string): AsyncGenerator<Summar
 
     if (finalText) saveSummaryMemory(meetingId, finalText, dataDir);
     yield { type: "done", data: { summary: finalText } };
+  } catch (e: unknown) {
+    yield { type: "error", data: { error: e instanceof Error ? e.message : String(e) } };
+  }
+}
+
+// ---------- Chat agent (multi-turn Q&A) ----------
+
+export async function* runChatAgent(
+  meetingId: string,
+  userMessage: string,
+): AsyncGenerator<SummaryEvent> {
+  const env = getAgentEnv();
+  const model = getModel();
+  const dataDir = getDataDir();
+  const mcpServer = createMeetingMcpServer();
+
+  // Load persisted history (last 6 messages = 3 rounds) for context
+  const history = getChatMessages(meetingId).slice(-6);
+  const historyBlock = history.length > 0
+    ? history.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`).join("\n") + "\n\n"
+    : "";
+
+  const prompt = historyBlock
+    ? `[历史对话]\n${historyBlock}[当前问题]\n用户：${userMessage}\n\n请回答用户的当前问题，参考历史对话保持上下文连贯。会议 ID 是 "${meetingId}"，需要时请用工具获取会议内容。`
+    : `用户问题：${userMessage}\n\n请回答，会议 ID 是 "${meetingId}"，需要时请用工具获取会议内容。`;
+
+  const systemPrompt = getSystemPrompt();
+  let finalText = "";
+
+  try {
+    const agentQuery = query({
+      prompt,
+      options: {
+        model,
+        env,
+        systemPrompt,
+        cwd: path.join(dataDir, ".."),
+        mcpServers: { "meeting-db": mcpServer },
+        allowedTools: [
+          "mcp__meeting-db__get_meeting_transcript",
+          "mcp__meeting-db__list_speakers",
+          "mcp__meeting-db__search_speaker_history",
+          "mcp__meeting-db__search_past_meetings",
+        ],
+        disallowedTools: ["Bash", "Edit", "Write", "Read", "Glob", "Grep"],
+        permissionMode: "dontAsk",
+        persistSession: false,
+      },
+    });
+
+    for await (const msg of agentQuery as AsyncIterable<SDKMessage>) {
+      if (msg.type === "assistant") {
+        const content = (msg.message as { content: unknown[] }).content ?? [];
+        for (const block of content) {
+          const b = block as { type: string; text?: string; name?: string; input?: unknown };
+          if (b.type === "text" && b.text) {
+            finalText += b.text;
+            yield { type: "text_delta", data: { text: b.text } };
+          } else if (b.type === "tool_use") {
+            yield { type: "tool_use", data: { name: b.name, input: b.input } };
+          }
+        }
+      } else if (msg.type === "user") {
+        const content = (msg.message as { content: unknown[] }).content ?? [];
+        for (const block of content) {
+          const b = block as { type: string; content?: unknown };
+          if (b.type === "tool_result") {
+            const resultText = Array.isArray(b.content)
+              ? (b.content[0] as { text?: string })?.text ?? ""
+              : String(b.content ?? "");
+            try {
+              yield { type: "tool_result", data: JSON.parse(resultText) };
+            } catch {
+              yield { type: "tool_result", data: { raw: resultText } };
+            }
+          }
+        }
+      }
+    }
+
+    yield { type: "done", data: { fullText: finalText } };
   } catch (e: unknown) {
     yield { type: "error", data: { error: e instanceof Error ? e.message : String(e) } };
   }

@@ -63,6 +63,15 @@ function initDb(): Database.Database {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS meeting_chats (
+      id          TEXT PRIMARY KEY,
+      meeting_id  TEXT NOT NULL,
+      role        TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+      content     TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mc_meeting ON meeting_chats(meeting_id);
   `);
   return db;
 }
@@ -148,4 +157,26 @@ export function setSetting(key: string, value: string): void {
 export function getAllSettings(): Record<string, string> {
   const rows = getDb().prepare<[], { key: string; value: string }>("SELECT key, value FROM settings").all();
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+}
+
+// ---------- Chat message helpers ----------
+
+export interface ChatMessageRow {
+  id: string;
+  meeting_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: number;
+}
+
+export function saveChatMessage(meetingId: string, role: "user" | "assistant", content: string): void {
+  getDb().prepare(
+    "INSERT INTO meeting_chats (id, meeting_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).run(newId(), meetingId, role, content, now());
+}
+
+export function getChatMessages(meetingId: string): ChatMessageRow[] {
+  return getDb().prepare<[string], ChatMessageRow>(
+    "SELECT id, meeting_id, role, content, created_at FROM meeting_chats WHERE meeting_id = ? ORDER BY created_at ASC"
+  ).all(meetingId);
 }
