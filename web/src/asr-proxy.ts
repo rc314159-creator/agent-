@@ -12,6 +12,13 @@ const DEFAULT_DASHSCOPE_URL =
   'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime';
 const PORT = 4928;
 
+// Reconnect policy: DashScope long sessions sometimes drop with "Internal
+// service error". Auto-reconnect transparently to the client so a meeting
+// recording isn't silently lost.
+const MAX_RECONNECTS = 5;
+const RECONNECT_WINDOW_MS = 60_000;
+const RECONNECT_BACKOFF_MS = [200, 500, 1000, 2000, 4000];
+
 function loadSettingsFromDb(): { url: string; apiKey: string } {
   try {
     const dbPath = process.env.VOICEPRINT_DB_PATH ?? resolve(process.cwd(), '../data/vp.db');
@@ -34,12 +41,8 @@ function loadSettingsFromDb(): { url: string; apiKey: string } {
   }
 }
 
-// Load once at startup; restart the proxy to pick up settings changes.
 const { url: DASHSCOPE_URL, apiKey: API_KEY } = loadSettingsFromDb();
 
-// Log to a file so errors are inspectable after the fact. Writing directly to
-// the same logs/ dir used by the Next.js pino logger keeps everything in one
-// place.
 const LOG_FILE = resolve(process.cwd(), 'logs/asr-proxy.log');
 try { mkdirSync(dirname(LOG_FILE), { recursive: true }); } catch { /* ignore */ }
 
@@ -65,72 +68,137 @@ wss.on('connection', (client) => {
   const cid = ++connectionId;
   log('info', 'client connected', { cid });
 
-  const upstream = new WebSocket(DASHSCOPE_URL, {
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      'OpenAI-Beta': 'realtime=v1',
-    },
-  });
-
+  // ---- per-session state -----------------------------------------------
+  let upstream: WebSocket | null = null;
+  let reconnects = 0;
+  const reconnectTimestamps: number[] = [];
+  let lastSessionUpdate: { data: Buffer; isBinary: boolean } | null = null;
+  let clientClosed = false;
   // Buffer messages that arrive before the upstream is ready
   const pendingToUpstream: Array<{ data: Buffer; isBinary: boolean }> = [];
 
-  // Relay: client → DashScope. CRITICAL: must preserve the frame type
-  // (TEXT vs BINARY). The `ws` library defaults `ws.send(Buffer)` to BINARY,
-  // but DashScope rejects binary frames for JSON control messages with
-  // "Internal server error" 1011. Always pass `{ binary }` explicitly.
+  function notifyClient(payload: object) {
+    if (client.readyState === WebSocket.OPEN) {
+      try { client.send(JSON.stringify(payload), { binary: false }); } catch { /* ignore */ }
+    }
+  }
+
+  function connectUpstream() {
+    const us = new WebSocket(DASHSCOPE_URL, {
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'OpenAI-Beta': 'realtime=v1',
+      },
+    });
+    upstream = us;
+
+    us.on('open', () => {
+      log('info', 'dashscope connected', { cid, attempt: reconnects });
+      // After a reconnect, resend the session.update so the upstream is
+      // configured the same way the client expected.
+      if (reconnects > 0 && lastSessionUpdate) {
+        us.send(lastSessionUpdate.data, { binary: lastSessionUpdate.isBinary });
+        log('info', 'replayed session.update after reconnect', { cid });
+        notifyClient({ type: 'proxy.reconnected', cid, attempt: reconnects });
+      }
+      for (const { data, isBinary } of pendingToUpstream) {
+        us.send(data, { binary: isBinary });
+      }
+      pendingToUpstream.length = 0;
+    });
+
+    us.on('message', (data, isBinary) => {
+      const raw = data.toString();
+      if (raw.length < 2048) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed?.type === 'error') {
+            log('error', 'dashscope error event', { cid, error: parsed.error });
+          } else if (parsed?.type === 'session.created' || parsed?.type === 'session.updated') {
+            log('info', `dashscope ${parsed.type}`, { cid, model: parsed.session?.model });
+          }
+        } catch { /* not JSON */ }
+      }
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data, { binary: isBinary });
+      }
+    });
+
+    us.on('close', (code, reason) => {
+      log('warn', 'dashscope closed', { cid, code, reason: reason.toString() });
+      if (clientClosed) return;
+      if (code === 1000) {
+        // Clean close — propagate.
+        if (client.readyState === WebSocket.OPEN) client.close();
+        return;
+      }
+      // Abnormal close → try reconnect.
+      tryReconnect();
+    });
+
+    us.on('error', (err) => {
+      log('error', 'dashscope socket error', { cid, message: err.message });
+      // The 'close' handler will fire after this and trigger the reconnect.
+    });
+  }
+
+  function tryReconnect() {
+    if (clientClosed) return;
+    const now = Date.now();
+    // Drop reconnect timestamps older than the window
+    while (reconnectTimestamps.length && now - reconnectTimestamps[0] > RECONNECT_WINDOW_MS) {
+      reconnectTimestamps.shift();
+    }
+    if (reconnectTimestamps.length >= MAX_RECONNECTS) {
+      log('error', 'reconnect budget exhausted, closing client', { cid, attempts: reconnectTimestamps.length });
+      notifyClient({ type: 'proxy.reconnect_failed', cid, message: '上游 ASR 服务多次重连失败' });
+      if (client.readyState === WebSocket.OPEN) client.close();
+      return;
+    }
+    reconnectTimestamps.push(now);
+    reconnects += 1;
+    const backoff = RECONNECT_BACKOFF_MS[Math.min(reconnects - 1, RECONNECT_BACKOFF_MS.length - 1)];
+    log('warn', 'scheduling dashscope reconnect', { cid, attempt: reconnects, delayMs: backoff });
+    notifyClient({ type: 'proxy.reconnecting', cid, attempt: reconnects, delayMs: backoff });
+    setTimeout(() => {
+      if (!clientClosed) connectUpstream();
+    }, backoff);
+  }
+
+  // Client → upstream relay. Save session.update so we can replay on reconnect.
   client.on('message', (data, isBinary) => {
     const buf = data as Buffer;
-    if (upstream.readyState === WebSocket.OPEN) {
+
+    if (!isBinary) {
+      const raw = buf.toString();
+      if (raw.length < 4096) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed?.type === 'session.update') {
+            lastSessionUpdate = { data: Buffer.from(buf), isBinary };
+          }
+        } catch { /* not JSON */ }
+      }
+    }
+
+    if (upstream && upstream.readyState === WebSocket.OPEN) {
       upstream.send(buf, { binary: isBinary });
     } else {
       pendingToUpstream.push({ data: buf, isBinary });
+      // Cap the buffer so a long outage doesn't OOM the proxy.
+      if (pendingToUpstream.length > 500) pendingToUpstream.shift();
     }
-  });
-
-  upstream.on('open', () => {
-    log('info', 'dashscope connected', { cid });
-    for (const { data, isBinary } of pendingToUpstream) {
-      upstream.send(data, { binary: isBinary });
-    }
-    pendingToUpstream.length = 0;
-  });
-
-  // Relay: DashScope → client. Also inspect server errors so we can log them.
-  upstream.on('message', (data, isBinary) => {
-    const raw = data.toString();
-    // Non-audio control messages are small JSON; log errors/session events.
-    if (raw.length < 2048) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed?.type === 'error') {
-          log('error', 'dashscope error event', { cid, error: parsed.error });
-        } else if (parsed?.type === 'session.created' || parsed?.type === 'session.updated') {
-          log('info', `dashscope ${parsed.type}`, { cid, model: parsed.session?.model });
-        }
-      } catch { /* not JSON, ignore */ }
-    }
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data, { binary: isBinary });
-    }
-  });
-
-  upstream.on('close', (code, reason) => {
-    log('warn', 'dashscope closed', { cid, code, reason: reason.toString() });
-    if (client.readyState === WebSocket.OPEN) client.close();
   });
 
   client.on('close', () => {
     log('info', 'client closed', { cid });
-    if (upstream.readyState === WebSocket.OPEN) upstream.close();
-  });
-
-  upstream.on('error', (err) => {
-    log('error', 'dashscope socket error', { cid, message: err.message });
-    if (client.readyState === WebSocket.OPEN) client.close();
+    clientClosed = true;
+    if (upstream && upstream.readyState === WebSocket.OPEN) upstream.close();
   });
 
   client.on('error', (err) => {
     log('error', 'client socket error', { cid, message: err.message });
   });
+
+  connectUpstream();
 });

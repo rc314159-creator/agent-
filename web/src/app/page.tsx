@@ -66,6 +66,9 @@ export default function RecorderPage() {
   const [status, setStatus] = useState<string>("");
   const [vpHealthy, setVpHealthy] = useState<boolean | null>(null);
   const [others, setOthers] = useState<OtherSpeaker[]>([]);
+  // ASR 连接状态: "ok" 正常 / "reconnecting" proxy 重连中 / "lost" 连接已死
+  const [asrConn, setAsrConn] = useState<"ok" | "reconnecting" | "lost">("ok");
+  const [asrConnDetail, setAsrConnDetail] = useState<string>("");
   const colorMapRef = useRef(new Map<string, number>());
 
   // Audio source configuration state — 默认收起，从 localStorage 加载上次选择
@@ -284,6 +287,8 @@ export default function RecorderPage() {
       wsRef.current = null;
     }
     setRecording(false);
+    setAsrConn("ok");
+    setAsrConnDetail("");
     setStatus("已停止。会议已归档, 可到历史会议查看。");
 
     if (meetingIdRef.current) {
@@ -420,14 +425,32 @@ export default function RecorderPage() {
             if (!liveBubbleRef.current) {
               segStartMsRef.current = Date.now() - recordingStartRef.current;
             }
+          } else if (type === "proxy.reconnecting") {
+            setAsrConn("reconnecting");
+            setAsrConnDetail(`正在重连 ASR (第 ${msg.attempt} 次，${msg.delayMs}ms 后)…`);
+          } else if (type === "proxy.reconnected") {
+            setAsrConn("ok");
+            setAsrConnDetail("");
+          } else if (type === "proxy.reconnect_failed") {
+            setAsrConn("lost");
+            setAsrConnDetail(msg.message ?? "ASR 上游多次重连失败，请停止录音后刷新页面重启");
           }
         } catch {
           /* ignore */
         }
       };
 
-      ws.onerror = () => setStatus("语音识别连接异常");
-      ws.onclose = () => { /* recording cleanup handles this */ };
+      ws.onerror = () => {
+        setAsrConn("lost");
+        setAsrConnDetail("WebSocket 错误：与 ASR 代理的连接出问题，可能没在录音");
+      };
+      ws.onclose = () => {
+        // 录音中 WS 被关闭 = 异常，警告用户而不是悄悄继续
+        if (wsRef.current === ws) {
+          setAsrConn("lost");
+          setAsrConnDetail("ASR 连接已断开，当前不在录音状态。请停止后刷新页面重试");
+        }
+      };
 
       processor.onaudioprocess = (e) => {
         const ch = e.inputBuffer.getChannelData(0);
@@ -545,6 +568,16 @@ export default function RecorderPage() {
         <div className="text-xs text-amber-300 mb-3 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
           声纹服务未连接 (localhost:4929)。先在终端跑:
           <code className="ml-1 px-1.5 py-0.5 bg-black/30 rounded">docker compose up -d voiceprint-service</code>
+        </div>
+      )}
+      {recording && asrConn !== "ok" && (
+        <div className={`text-xs mb-3 rounded px-3 py-2 border ${
+          asrConn === "lost"
+            ? "text-red-200 bg-red-500/15 border-red-500/40 animate-pulse"
+            : "text-amber-200 bg-amber-500/10 border-amber-500/30"
+        }`}>
+          <strong>{asrConn === "lost" ? "⚠️ ASR 已断开" : "🔄 重连中"}</strong>
+          {asrConnDetail ? ` — ${asrConnDetail}` : ""}
         </div>
       )}
       {status && (
