@@ -58,10 +58,13 @@ export default function SettingsPage() {
         if (s.anthropic_model) setModel(s.anthropic_model);
         if (s.agent_system_prompt) setSystemPrompt(s.agent_system_prompt);
         if (s.anthropic_base_url) {
-          const idx = PROVIDERS.findIndex((p) => p.baseUrl === s.anthropic_base_url);
+          // Normalize before matching: yunwu env may store .../v1 but PROVIDERS list is bare
+          const stripV1 = (u: string) => u.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+          const stored = stripV1(s.anthropic_base_url);
+          const idx = PROVIDERS.findIndex((p) => p.baseUrl && stripV1(p.baseUrl) === stored);
           if (idx >= 0) {
             setProviderIdx(idx);
-            setBaseUrl(s.anthropic_base_url);
+            setBaseUrl(PROVIDERS[idx].baseUrl);
           } else {
             setProviderIdx(2);
             setCustomUrl(s.anthropic_base_url);
