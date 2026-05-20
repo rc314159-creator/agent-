@@ -68,21 +68,36 @@ open http://localhost:4927
 
 ```
 浏览器
-  ├─ 录音 → AudioContext → ScriptProcessor
-  ├─ 实时 PCM → WebSocket → ASR Proxy → Qwen3-ASR (实时字幕)
-  └─ 每句话停顿 (Qwen 的 .completed 事件) → 切对应 PCM 段 →
-     POST /api/utterances/ingest
-                ↓
-        Next.js API:
+  ├─ 选通道: mic / getDisplayMedia(system) / mic+system merge (R8)
+  ├─ AudioContext ScriptProcessor → PCM16 → base64
+  │    → WebSocket → ASR Proxy (4928) → Qwen3-ASR (实时字幕)
+  └─ .completed 事件 → flushSegment()
+        → POST /api/utterances/ingest (WAV bytes)
+              ↓
+        Next.js API Routes:
           save WAV → data/segments/<uuid>.wav
-          POST 4929 /embed → 192d float32 embedding
-          余弦匹配所有 speaker.centroid:
-            ≥ 0.75 → 自动归该 speaker
-            0.6~0.75 → 归 + needs_review (autoMode 关时)
-            < 0.6 → 新建 "新用户 N"
-          recomputeCentroid(speakerId) (重算均值)
-                ↓
-        前端: 把"归属中..."气泡换成正式角色名
+          POST 4929/embed → 192d float32 embedding
+          余弦匹配 speaker.centroid:
+            ≥ 0.75 → 自动归  |  0.6~0.75 → 待确认  |  < 0.6 → 新用户
+          recomputeCentroid(speakerId)
+          emitUtterance(meetingId, data)  ──→  SSE bus (R8)
+              ↓                                    ↓
+        返回 {speakerId, speakerName, ...}   GET /meetings/[id]/stream
+              ↓                              EventSource → 实时追加字幕
+        前端更新气泡
+
+  AI 总结 (R9):
+    点击「AI 总结」
+      → POST /api/meetings/[id]/summary (SSE)
+          → claude-agent-sdk query() + MCP server
+              工具: get_meeting_transcript / list_speakers /
+                    search_speaker_history / search_past_meetings
+          → text_delta → 流式 Markdown
+          → 写 data/agent-memory/meeting_<id>.md
+
+  配置 (R10):
+    /settings 页 → PATCH /api/settings → SQLite settings 表
+    优先级: settings表 > env > 默认值
 ```
 
 ## 关键决策
@@ -92,18 +107,40 @@ open http://localhost:4927
 - **存储**: SQLite (`data/vp.db`) + 音频片段 (`data/segments/<uuid>.wav`). 每条 utterance 保留 raw_embedding 用于用户移动 utterance 时重算 centroid.
 - **进化**: 用户改名只改 name 不动 centroid; 用户把一句话移到另一角色 → 双方 centroid 用 utterances 表 raw_embedding 重算 (idempotent).
 
-## 验收清单 (8 条)
+## 验收清单
+
+**R7 基础管线 (8 条)**
 
 1. ✅ `docker compose up` 起声纹服务 (4929 healthy)
-2. ✅ 浏览器进入录音页, 看到 "开始录音" 按钮 + 自动模式开关 + 提示文字
-3. ⏳ 真人录音验证: 一句话停顿后 1-2 秒归到某角色
-4. ⏳ 真人录音验证: 同人讲第二句自动归到同一角色
-5. ⏳ 真人录音验证: 换人讲话新角色出现
-6. ✅ /voiceprints 页: 角色列表 + 进入详情看样本 + 播放/改名/移动
-7. ✅ /meetings 页: 会议列表 + 进入看完整对话流 (色块标 speaker, 时间戳, 匹配 %)
-8. ✅ 自动模式开关: UI checkbox + ingest API 接 `autoMode=1` 参数
+2. ✅ 浏览器进入录音页，看到"开始录音"按钮 + 通道选择 + 自动模式开关
+3. ⏳ 真人录音: 一句话停顿后 1-2 秒归到某角色
+4. ⏳ 真人录音: 同人讲第二句自动归到同一角色
+5. ⏳ 真人录音: 换人讲话新角色出现
+6. ✅ /voiceprints 页: 角色列表 + 详情 + 播放/改名/移动
+7. ✅ /meetings 页: 会议列表 + 完整对话流
+8. ✅ 自动模式开关有效
 
-3-5 项需要真实人声音验证, ECAPA 对纯合成音 (sin/noise) 区分较弱所以无法在 CI 自动测.
+**R8 录音通道 + 实时字幕**
+
+9. ✅ 录音页"开始录音"后显示通道选择器（麦克风/系统音频/混合）
+10. ✅ 选"系统音频"后浏览器弹屏幕共享权限请求
+11. ✅ 麦克风测试音量计有动画，静音 2s 显示告警
+12. ✅ 录音中打开 /meetings/[id]，新字幕实时追加（SSE）
+
+**R9 AI 会议总结**
+
+13. ✅ 会议详情页出现「AI 总结」按钮（有 utterance 时）
+14. ✅ 点击后流式展示工具调用过程和 Markdown 总结
+15. ✅ 总结完成后刷新页面仍可看到（持久化到 agent-memory/）
+16. ⏳ 第二次总结引用第一次总结内容（跨会议 memory）
+
+**R10 配置中心**
+
+17. ✅ /settings 页显示所有配置项，填写 API key 保存后刷新保留
+18. ✅ 测试连通性按钮在配置 key 后可用，返回 ok/error
+19. ✅ 修改 model 后 AI 总结使用新 model
+
+3-5 项需要真实人声验证；16 项需有真实两次总结的会议数据。
 
 ## 配置
 
