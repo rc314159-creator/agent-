@@ -20,13 +20,41 @@ open http://localhost:4927
 
 第一次 docker build 会花 5-10 分钟（拉 CPU torch + speechbrain + ECAPA 权重，~2GB 镜像）。
 
-## 三个页面
+## 页面
 
 | 路径 | 功能 |
 |------|------|
-| `/` | 录音页. 点录音 → 讲话 → 字幕实时滚动 → 每句话停顿后 1-2 秒归到角色 |
-| `/voiceprints` | 声纹库. 看所有角色, 进角色详情可以听每段样本、改名、移动到别的角色 |
-| `/meetings` | 历史会议. 完整对话流 |
+| `/` | 录音页. 选通道（麦克风/系统音频/混合）→ 麦克风测试 → 开始录音 → 实时字幕 → 每句归角色 |
+| `/voiceprints` | 声纹库. 角色列表, 详情页听样本 / 改名 / 移动 utterance |
+| `/meetings` | 历史会议列表 |
+| `/meetings/[id]` | 会议详情. 录音中实时追加字幕 (SSE); 结束后可触发 AI 总结 |
+| `/settings` | 配置中心. Anthropic API key + 模型 + DashScope key + Agent system prompt |
+
+## R8/R9/R10 新增功能
+
+### R8 — 录音通道选择 + 麦克风测试 + 会议详情实时字幕
+
+- **录音通道**: 开始录音前选择麦克风 / 系统音频 / 混合（WebAudio ChannelMerger）
+- **麦克风测试**: 音量计 + 静音 2 秒告警，支持多设备切换
+- **实时字幕 SSE**: 录音进行中打开 `/meetings/[id]`，新字幕通过 Server-Sent Events 实时追加
+
+### R9 — AI 会议总结 + 跨会议 memory
+
+- 会议详情页右上角「AI 总结」按钮触发流式分析
+- 使用 `@anthropic-ai/claude-agent-sdk` + MCP server 模式
+- 4 个工具: 获取会议记录 / 列声纹角色 / 查角色历史 / 全文搜索
+- 总结写入 `data/agent-memory/meeting_<id>.md`，下次总结自动加载作为历史记忆
+- 支持自定义 system prompt（在 `/settings` 配置）
+
+### R10 — 配置中心 `/settings`
+
+- Anthropic API key + base URL + 模型选择（Opus/Sonnet/Haiku）
+- DashScope ASR key（留空则读 `DASHSCOPE_API_KEY` 环境变量）
+- Agent system prompt 可编辑
+- API key 展示脱敏（首4尾4），保存时只覆盖主动填写的字段
+- 「测试连通性」按钮验证 Anthropic API 可达性
+
+---
 
 ## 端口分配
 
@@ -79,9 +107,22 @@ open http://localhost:4927
 
 ## 配置
 
-- DashScope API key: `web/.env.local` 里的 `DASHSCOPE_API_KEY`
+**推荐方式（R10）**: 启动后访问 http://localhost:4927/settings，在页面上填写所有 key。
+
+**备用方式（环境变量）**:
+
+```bash
+# web/.env.local
+DASHSCOPE_API_KEY=sk-xxx          # DashScope ASR
+ANTHROPIC_API_KEY=sk-ant-xxx      # Claude AI 总结（或用 settings 页配置）
+ANTHROPIC_BASE_URL=https://...    # 可选，使用代理时设置
+```
+
+优先级: settings 表 > 环境变量 > 代码默认值
+
+其他:
 - 数据目录: `data/` (gitignore)
-- 声纹服务环境: 默认从 `localhost:4929` 拿, 可用 `VOICEPRINT_SERVICE_URL` 覆盖
+- 声纹服务: 默认 `localhost:4929`，可用 `VOICEPRINT_SERVICE_URL` 覆盖
 
 ## 已知边界
 
@@ -103,20 +144,30 @@ open http://localhost:4927
 │   └── requirements.txt
 ├── web/
 │   ├── src/app/
-│   │   ├── page.tsx                          # 录音页 (VAD + ingest 端到端)
-│   │   ├── voiceprints/page.tsx              # 声纹库列表
+│   │   ├── page.tsx                          # 录音页 (通道选择 + ingest 端到端)
 │   │   ├── voiceprints/[id]/page.tsx         # 角色详情
-│   │   ├── meetings/page.tsx                 # 历史会议列表
-│   │   ├── meetings/[id]/page.tsx            # 会议详情
-│   │   └── api/                              # SQLite REST API
+│   │   ├── meetings/[id]/page.tsx            # 会议详情 (SSE + AI 总结面板)
+│   │   ├── settings/page.tsx                 # 配置页 (R10)
+│   │   └── api/
+│   │       ├── utterances/ingest/            # 声纹管线核心
+│   │       ├── meetings/[id]/stream/         # SSE 流式字幕 (R8)
+│   │       ├── meetings/[id]/summary/        # AI 总结 SSE (R9)
+│   │       ├── settings/                     # GET/PATCH 配置 (R10)
+│   │       └── agent/ping/                   # Anthropic 连通测试 (R10)
 │   ├── src/lib/
-│   │   ├── db.ts                             # better-sqlite3 + schema
+│   │   ├── db.ts                             # better-sqlite3 + schema + getSetting()
+│   │   ├── agent.ts                          # claude-agent-sdk + MCP server + 4 工具 (R9)
+│   │   ├── sse-bus.ts                        # EventEmitter 单例 (R8)
 │   │   ├── voiceprint-client.ts              # 调 4929
 │   │   ├── match.ts                          # 三档阈值 + centroid 重算
 │   │   └── wav.ts                            # PCM 重采样 + WAV 编码
-│   └── src/components/nav.tsx                # 顶部三 tab 导航
+│   └── src/components/
+│       ├── AudioSourcePicker.tsx             # 录音通道选择 (R8)
+│       ├── MicrophoneTester.tsx              # 音量计 + 静音告警 (R8)
+│       └── nav.tsx                           # 顶部导航 (含 /settings)
 ├── data/
 │   ├── vp.db                                 # SQLite (gitignore)
-│   └── segments/<uuid>.wav                   # 音频片段 (gitignore)
+│   ├── segments/<uuid>.wav                   # 音频片段 (gitignore)
+│   └── agent-memory/meeting_<id>.md          # AI 总结记忆 (gitignore)
 └── docker-compose.yml
 ```
