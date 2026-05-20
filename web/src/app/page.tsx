@@ -407,11 +407,6 @@ export default function RecorderPage() {
           const msg = JSON.parse(evt.data as string);
           const type: string = msg.type ?? "";
 
-          // catch-all 日志：每条非 audio 事件都打到 console，方便排查事件名差异
-          if (!type.includes("audio_buffer.append")) {
-            console.log("[ASR]", type, msg);
-          }
-
           // 实时部分文本（DashScope 用 .text；OpenAI 标准用 .delta；两者都接）
           if (
             type === "conversation.item.input_audio_transcription.text" ||

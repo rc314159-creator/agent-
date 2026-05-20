@@ -82,7 +82,7 @@ ws.on('message', (data) => {
       const t = msg.type;
       if (t === 'conversation.item.input_audio_transcription.text') {
         textEvents++;
-        if (textEvents % 5 === 0) console.log(`[evt] .text × ${textEvents} (incremental subtitles flowing)`);
+        if (textEvents <= 5) console.log(`[evt RAW .text #${textEvents}]:`, JSON.stringify(msg));
       } else if (t === 'conversation.item.input_audio_transcription.completed') {
         completedEvents++;
         const transcript = msg.transcript ?? '';
