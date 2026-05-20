@@ -68,10 +68,20 @@ export default function RecorderPage() {
   const [others, setOthers] = useState<OtherSpeaker[]>([]);
   const colorMapRef = useRef(new Map<string, number>());
 
-  // Audio source configuration state (shown before recording starts)
+  // Audio source configuration state — 默认收起，从 localStorage 加载上次选择
   const [audioMode, setAudioMode] = useState<AudioSourceMode>("microphone");
   const [micDeviceId, setMicDeviceId] = useState<string>("");
   const [showSetup, setShowSetup] = useState(false);
+
+  // Restore last-used source from localStorage so 1-click 直接录用上次的配置
+  useEffect(() => {
+    try {
+      const m = localStorage.getItem("vp:audioMode");
+      if (m === "microphone" || m === "system" || m === "mixed") setAudioMode(m);
+      const d = localStorage.getItem("vp:micDeviceId");
+      if (d) setMicDeviceId(d);
+    } catch {/* ignore */}
+  }, []);
 
   // ---- refs read by audio callbacks ----
   const recordingStartRef = useRef<number>(0);
@@ -469,18 +479,25 @@ export default function RecorderPage() {
 
   return (
     <div className="max-w-3xl mx-auto p-6">
-      {/* Top bar */}
-      <div className="flex items-center gap-3 mb-4">
+      {/* Top bar — 一键直录，录音源选择折叠到 disclosure */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         {!recording ? (
           <>
             <button
-              onClick={() => setShowSetup((v) => !v)}
-              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-all"
+              onClick={startRecording}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-all shadow-md"
             >
               <Mic className="w-4 h-4" />
               开始录音
             </button>
-            <span className="text-xs text-muted-foreground">{SOURCE_LABELS[audioMode]}</span>
+            <button
+              onClick={() => setShowSetup((v) => !v)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-2 rounded border border-border/40 hover:bg-muted/40 text-muted-foreground transition-colors"
+              title="切换录音源 / 测试麦克风"
+            >
+              <span>{showSetup ? "▾" : "▸"}</span>
+              <span>{SOURCE_LABELS[audioMode]}</span>
+            </button>
           </>
         ) : (
           <>
@@ -509,25 +526,18 @@ export default function RecorderPage() {
         </label>
       </div>
 
-      {/* Pre-recording setup panel */}
+      {/* 录音源 disclosure（折叠的）— 默认收起，点 disclosure 才展开 */}
       {showSetup && !recording && (
-        <div className="mb-4 p-4 rounded-lg border border-border/60 bg-muted/20 space-y-4">
+        <div className="mb-4 p-4 rounded-lg border border-border/40 bg-muted/10 space-y-4">
           <AudioSourcePicker
             mode={audioMode}
             micDeviceId={micDeviceId}
-            onModeChange={setAudioMode}
-            onMicDeviceChange={setMicDeviceId}
+            onModeChange={(m) => { setAudioMode(m); try { localStorage.setItem("vp:audioMode", m); } catch {/* ignore */} }}
+            onMicDeviceChange={(id) => { setMicDeviceId(id); try { localStorage.setItem("vp:micDeviceId", id); } catch {/* ignore */} }}
           />
           {(audioMode === "microphone" || audioMode === "mixed") && (
             <MicrophoneTester micDeviceId={micDeviceId} active={showSetup && !recording} />
           )}
-          <button
-            onClick={startRecording}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-all"
-          >
-            <Mic className="w-4 h-4" />
-            确认并开始录音
-          </button>
         </div>
       )}
 
