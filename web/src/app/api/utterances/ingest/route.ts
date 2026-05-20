@@ -27,6 +27,7 @@ import {
 } from "@/lib/db";
 import { embedAudio } from "@/lib/voiceprint-client";
 import { matchAndAssign, recomputeCentroid } from "@/lib/match";
+import { emitUtterance } from "@/lib/sse-bus";
 
 export const runtime = "nodejs";
 
@@ -93,6 +94,18 @@ export async function POST(req: NextRequest) {
 
   // 5) Refresh that speaker's centroid against the full sample set.
   recomputeCentroid(match.speakerId);
+
+  // 6) Broadcast to any SSE subscribers watching this meeting's stream.
+  emitUtterance(meetingId, {
+    utteranceId,
+    speakerId: match.speakerId,
+    speakerName: match.speakerName,
+    text,
+    confidence: match.confidence,
+    needsReview: match.needsReview,
+    startMs,
+    endMs,
+  });
 
   return Response.json({
     utteranceId,

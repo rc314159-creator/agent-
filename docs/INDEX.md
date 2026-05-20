@@ -65,6 +65,9 @@ utterances (id, meeting_id, speaker_id, text, start_ms, end_ms,
 ## 开发计划
 
 - [2026.05.19 Voiceprint MVP](开发计划/2026.05.19/voiceprint-meeting-recorder.md) — **状态: overnight 执行中**
+- [2026.05.20 R8 录音通道+流式字幕](开发计划/2026.05.20/r8-audio-channels-and-streaming.md) — 通道选择（麦克风/系统/混合）+ 麦克风测试 UI + SSE 流式字幕
+- [2026.05.20 R9 Agent SDK+会议总结](开发计划/2026.05.20/r9-agent-sdk-summary-and-memory.md) — Claude Agent SDK + 4 工具 + 跨会议 memory + 流式总结 API
+- [2026.05.20 R10 Settings 页](开发计划/2026.05.20/r10-settings-page.md) — /settings 页 + SQLite settings 表 + API key & model & system prompt 配置
 
 ---
 

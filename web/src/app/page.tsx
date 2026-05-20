@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { Mic, Square, Loader2, AlertTriangle, Check } from "lucide-react";
 import { concatChunks, resampleToInt16, encodeWav, int16ToBase64 } from "@/lib/wav";
+import { AudioSourcePicker, type AudioSourceMode } from "@/components/AudioSourcePicker";
+import { MicrophoneTester } from "@/components/MicrophoneTester";
 
 interface LiveLine {
   id: string;
@@ -49,6 +51,12 @@ function formatElapsed(s: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+const SOURCE_LABELS: Record<AudioSourceMode, string> = {
+  microphone: "麦克风",
+  system: "系统音频",
+  mixed: "麦克风 + 系统音频",
+};
+
 export default function RecorderPage() {
   const [meetingId, setMeetingId] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
@@ -60,11 +68,17 @@ export default function RecorderPage() {
   const [others, setOthers] = useState<OtherSpeaker[]>([]);
   const colorMapRef = useRef(new Map<string, number>());
 
+  // Audio source configuration state (shown before recording starts)
+  const [audioMode, setAudioMode] = useState<AudioSourceMode>("microphone");
+  const [micDeviceId, setMicDeviceId] = useState<string>("");
+  const [showSetup, setShowSetup] = useState(false);
+
   // ---- refs read by audio callbacks ----
   const recordingStartRef = useRef<number>(0);
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveBubbleRef = useRef<string | null>(null);
@@ -72,9 +86,9 @@ export default function RecorderPage() {
   // PCM buffer + segment slicing state
   const pcmChunksRef = useRef<Float32Array[]>([]);
   const pcmSampleRateRef = useRef<number>(16000);
-  const segStartChunkRef = useRef(0); // chunk index at which the current segment started
-  const segStartMsRef = useRef(0); // ms relative to recording start
-  const liveFinalizedRef = useRef(""); // ASR text accumulated for the current live bubble
+  const segStartChunkRef = useRef(0);
+  const segStartMsRef = useRef(0);
+  const liveFinalizedRef = useRef("");
   const meetingIdRef = useRef<string | null>(null);
   const autoModeRef = useRef<boolean>(true);
 
@@ -93,7 +107,7 @@ export default function RecorderPage() {
       .catch(() => setVpHealthy(false));
   }, []);
 
-  // Load other speakers list (for "move to" dropdown on needs-review items)
+  // Load other speakers list for "move to" dropdown
   const loadOthers = useCallback(async () => {
     try {
       const res = await fetch("/api/speakers");
@@ -121,7 +135,6 @@ export default function RecorderPage() {
     };
   }, [recording]);
 
-  // Write/extend the current live ("讲话中") bubble.
   const writeLive = useCallback((text: string, startMs: number) => {
     if (!text.trim()) return;
     setLines((prev) => {
@@ -148,8 +161,6 @@ export default function RecorderPage() {
     });
   }, []);
 
-  // Close out the live bubble, replace with an "embedding..." placeholder
-  // tied to a specific bubbleId, then async POST to /api/utterances/ingest.
   const flushSegment = useCallback(
     async (text: string, segStart: number, segEnd: number) => {
       const meeting = meetingIdRef.current;
@@ -163,16 +174,12 @@ export default function RecorderPage() {
       if (slice.length === 0) return;
       const segPcm = concatChunks(slice);
       const segMs = Math.floor((segPcm.length / sr) * 1000);
-      if (segMs < 300) {
-        // too short, drop
-        return;
-      }
+      if (segMs < 300) return;
 
       const pcm16 = resampleToInt16(segPcm, sr, 16000);
       const wav = encodeWav(pcm16, 16000);
 
       const placeholderId = `seg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      // Reuse the live bubble id if present so the UI continuity is smooth
       const liveId = liveBubbleRef.current;
       liveBubbleRef.current = null;
       setLines((prev) => {
@@ -258,6 +265,10 @@ export default function RecorderPage() {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    if (displayStreamRef.current) {
+      displayStreamRef.current.getTracks().forEach((t) => t.stop());
+      displayStreamRef.current = null;
+    }
     if (wsRef.current) {
       if (wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
       wsRef.current = null;
@@ -284,6 +295,7 @@ export default function RecorderPage() {
       return;
     }
 
+    setShowSetup(false);
     setLines([]);
     setElapsed(0);
     pcmChunksRef.current = [];
@@ -298,14 +310,59 @@ export default function RecorderPage() {
       const m = await mRes.json();
       setMeetingId(m.id);
       meetingIdRef.current = m.id;
-      setStatus(`录音中: ${m.title}`);
+      setStatus(`录音中: ${m.title} — ${SOURCE_LABELS[audioMode]}`);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      // Acquire audio stream(s) based on selected mode
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
       pcmSampleRateRef.current = audioCtx.sampleRate;
-      const source = audioCtx.createMediaStreamSource(stream);
+
+      let captureStream: MediaStream;
+
+      if (audioMode === "microphone") {
+        const s = await navigator.mediaDevices.getUserMedia({
+          audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
+        });
+        streamRef.current = s;
+        captureStream = s;
+      } else if (audioMode === "system") {
+        // getDisplayMedia: video:false so user only sees audio share prompt
+        const ds = await navigator.mediaDevices.getDisplayMedia({
+          video: true, // some browsers require video:true to show the picker
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+        });
+        // Drop video tracks immediately
+        ds.getVideoTracks().forEach((t) => t.stop());
+        displayStreamRef.current = ds;
+        captureStream = ds;
+      } else {
+        // mixed: merge mic + system into a single AudioContext destination stream
+        const micStream = await navigator.mediaDevices.getUserMedia({
+          audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true,
+        });
+        const sysStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+        });
+        sysStream.getVideoTracks().forEach((t) => t.stop());
+        streamRef.current = micStream;
+        displayStreamRef.current = sysStream;
+
+        const micSrc = audioCtx.createMediaStreamSource(micStream);
+        const sysSrc = audioCtx.createMediaStreamSource(sysStream);
+        const dest = audioCtx.createMediaStreamDestination();
+        micSrc.connect(dest);
+        sysSrc.connect(dest);
+        captureStream = dest.stream;
+      }
+
+      const source = audioCtx.createMediaStreamSource(captureStream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
 
@@ -321,8 +378,6 @@ export default function RecorderPage() {
               input_audio_format: "pcm",
               sample_rate: 16000,
               input_audio_transcription: { language: "zh" },
-              // Force 400ms silence as the segment boundary on the ASR side;
-              // each .completed event becomes one ingest call.
               turn_detection: { type: "server_vad", threshold: 0.0, silence_duration_ms: 400 },
             },
           }),
@@ -345,17 +400,13 @@ export default function RecorderPage() {
           } else if (type === "conversation.item.input_audio_transcription.completed") {
             const piece = (msg.transcript ?? "").trim();
             if (!piece) return;
-            // Append the new piece to the segment text
             const fullText = (liveFinalizedRef.current + piece).trim();
-            liveFinalizedRef.current = ""; // reset for next segment
+            liveFinalizedRef.current = "";
             const segStart = segStartMsRef.current;
             const segEnd = Date.now() - recordingStartRef.current;
             segStartMsRef.current = segEnd;
-            // Fire the async ingest. Errors are surfaced via setLines/status
-            // inside flushSegment, so we don't await it here.
             void flushSegment(fullText, segStart, segEnd);
           } else if (type === "input_audio_buffer.speech_started") {
-            // First time speech is detected, anchor segStart to current elapsed
             if (!liveBubbleRef.current) {
               segStartMsRef.current = Date.now() - recordingStartRef.current;
             }
@@ -366,14 +417,10 @@ export default function RecorderPage() {
       };
 
       ws.onerror = () => setStatus("语音识别连接异常");
-      ws.onclose = () => {
-        /* recording cleanup handles this */
-      };
+      ws.onclose = () => { /* recording cleanup handles this */ };
 
       processor.onaudioprocess = (e) => {
         const ch = e.inputBuffer.getChannelData(0);
-        // Buffer a COPY for downstream segmentation (the audio thread reuses
-        // this Float32 backing buffer across callbacks).
         pcmChunksRef.current.push(new Float32Array(ch));
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const pcm16 = resampleToInt16(ch, audioCtx.sampleRate, 16000);
@@ -387,9 +434,8 @@ export default function RecorderPage() {
       setStatus(`启动失败: ${e instanceof Error ? e.message : String(e)}`);
       stopRecording();
     }
-  }, [flushSegment, stopRecording, vpHealthy, writeLive]);
+  }, [flushSegment, stopRecording, vpHealthy, writeLive, audioMode, micDeviceId]);
 
-  // User actions on a needs-review or wrong-speaker line.
   const moveLine = useCallback(
     async (line: LiveLine, targetSpeakerId: string) => {
       if (!line.utteranceId) return;
@@ -402,12 +448,7 @@ export default function RecorderPage() {
       setLines((prev) =>
         prev.map((l) =>
           l.id === line.id
-            ? {
-                ...l,
-                speakerId: targetSpeakerId,
-                speakerName: target?.name ?? l.speakerName,
-                needsReview: false,
-              }
+            ? { ...l, speakerId: targetSpeakerId, speakerName: target?.name ?? l.speakerName, needsReview: false }
             : l,
         ),
       );
@@ -428,23 +469,34 @@ export default function RecorderPage() {
 
   return (
     <div className="max-w-3xl mx-auto p-6">
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={recording ? stopRecording : startRecording}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-            recording
-              ? "bg-red-500/90 hover:bg-red-500 text-white shadow-[0_0_16px_rgba(239,68,68,0.4)]"
-              : "bg-violet-600 hover:bg-violet-500 text-white"
-          }`}
-        >
-          {recording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          {recording ? "停止录音" : "开始录音"}
-        </button>
-        {recording && (
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-sm text-red-400 font-mono tabular-nums">{formatElapsed(elapsed)}</span>
-          </div>
+      {/* Top bar */}
+      <div className="flex items-center gap-3 mb-4">
+        {!recording ? (
+          <>
+            <button
+              onClick={() => setShowSetup((v) => !v)}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-all"
+            >
+              <Mic className="w-4 h-4" />
+              开始录音
+            </button>
+            <span className="text-xs text-muted-foreground">{SOURCE_LABELS[audioMode]}</span>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={stopRecording}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-red-500/90 hover:bg-red-500 text-white shadow-[0_0_16px_rgba(239,68,68,0.4)] transition-all"
+            >
+              <Square className="w-4 h-4" />
+              停止录音
+            </button>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-sm text-red-400 font-mono tabular-nums">{formatElapsed(elapsed)}</span>
+              <span className="text-xs text-muted-foreground">{SOURCE_LABELS[audioMode]}</span>
+            </div>
+          </>
         )}
         <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground select-none cursor-pointer">
           <input
@@ -456,6 +508,28 @@ export default function RecorderPage() {
           自动模式
         </label>
       </div>
+
+      {/* Pre-recording setup panel */}
+      {showSetup && !recording && (
+        <div className="mb-4 p-4 rounded-lg border border-border/60 bg-muted/20 space-y-4">
+          <AudioSourcePicker
+            mode={audioMode}
+            micDeviceId={micDeviceId}
+            onModeChange={setAudioMode}
+            onMicDeviceChange={setMicDeviceId}
+          />
+          {(audioMode === "microphone" || audioMode === "mixed") && (
+            <MicrophoneTester micDeviceId={micDeviceId} active={showSetup && !recording} />
+          )}
+          <button
+            onClick={startRecording}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-all"
+          >
+            <Mic className="w-4 h-4" />
+            确认并开始录音
+          </button>
+        </div>
+      )}
 
       {vpHealthy === false && (
         <div className="text-xs text-amber-300 mb-3 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
@@ -469,6 +543,7 @@ export default function RecorderPage() {
         </div>
       )}
 
+      {/* Live transcript */}
       <div className="space-y-2">
         {lines.length === 0 && !recording && (
           <p className="text-sm text-muted-foreground text-center py-12">

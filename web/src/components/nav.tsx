@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Mic, Users, History } from "lucide-react";
+import { Mic, Users, History, Settings } from "lucide-react";
 
 const TABS = [
   { href: "/", label: "录音", icon: Mic },
   { href: "/voiceprints", label: "声纹库", icon: Users },
   { href: "/meetings", label: "历史会议", icon: History },
+  { href: "/settings", label: "设置", icon: Settings },
 ];
 
 export function TopNav() {

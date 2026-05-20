@@ -59,6 +59,10 @@ function initDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_ut_meeting ON utterances(meeting_id);
     CREATE INDEX IF NOT EXISTS idx_ut_speaker ON utterances(speaker_id);
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -128,4 +132,20 @@ export interface UtteranceRow {
   confidence: number;
   needs_review: number;
   created_at: number;
+}
+
+// ---------- Settings helpers ----------
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare<[string], { value: string }>("SELECT value FROM settings WHERE key = ?").get(key);
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
+
+export function getAllSettings(): Record<string, string> {
+  const rows = getDb().prepare<[], { key: string; value: string }>("SELECT key, value FROM settings").all();
+  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
