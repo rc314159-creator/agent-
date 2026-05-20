@@ -73,6 +73,37 @@ function initDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_mc_meeting ON meeting_chats(meeting_id);
   `);
+
+  // R12 一次性迁移：把旧 yunwu agent 默认迁到 llmmelon（haiku 默认）。
+  // 仅当 user 没有显式配置过 agent_base_url，或配置的还是 yunwu 默认时才迁。
+  // 用户改过自定义 url / model 的不动。
+  try {
+    const cur = db.prepare("SELECT value FROM settings WHERE key = ?").get("agent_base_url") as { value: string } | undefined;
+    if (!cur || /yunwu\.ai\/?$/.test(cur.value) || /yunwu\.ai\/v1\/?$/.test(cur.value)) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+        "agent_base_url", "https://llmmelon.cloud/v1",
+      );
+      // 同时把 model 也升到 haiku-4-5（除非用户已经改过非 yunwu 默认）
+      const curModel = db.prepare("SELECT value FROM settings WHERE key = ?").get("agent_model") as { value: string } | undefined;
+      if (!curModel || curModel.value === "claude-sonnet-4-5-20250929") {
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+          "agent_model", "claude-haiku-4-5-20251001",
+        );
+      }
+      // 旧 anthropic_api_key 是 yunwu key，迁到 agent_api_key 但**值要换成 llmmelon**
+      // 不能简单复用 yunwu key 给 llmmelon——它们是不同中转
+      // 这里只设 llmmelon key（来自 env），不复用旧 yunwu key
+      if (process.env.LLMMELON_API_KEY) {
+        const curKey = db.prepare("SELECT value FROM settings WHERE key = ?").get("agent_api_key") as { value: string } | undefined;
+        if (!curKey) {
+          db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+            "agent_api_key", process.env.LLMMELON_API_KEY,
+          );
+        }
+      }
+    }
+  } catch { /* migration is best-effort, never blocks startup */ }
+
   return db;
 }
 

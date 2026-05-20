@@ -8,16 +8,18 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 // ---------- Config helpers ----------
 
 export function getAgentEnv(): Record<string, string | undefined> {
-  // New keys (agent_*) take priority; fallback to old anthropic_* keys for backward compat
+  // settings agent_* > ANTHROPIC env > LLMMELON env (new default) > legacy anthropic_* > YUNWU env
   const apiKey =
     getSetting("agent_api_key") ??
-    getSetting("anthropic_api_key") ??
     process.env.ANTHROPIC_API_KEY ??
+    process.env.LLMMELON_API_KEY ??
+    getSetting("anthropic_api_key") ??
     process.env.YUNWU_API_KEY;
   const rawBase =
     getSetting("agent_base_url") ??
-    getSetting("anthropic_base_url") ??
     process.env.ANTHROPIC_BASE_URL ??
+    (process.env.LLMMELON_API_KEY ? process.env.LLMMELON_BASE_URL : undefined) ??
+    getSetting("anthropic_base_url") ??
     (process.env.YUNWU_API_KEY ? process.env.YUNWU_BASE_URL : undefined);
   // SDK spawns claude CLI which appends /v1/messages — strip trailing /v1 to avoid doubling
   const baseURL = rawBase ? rawBase.replace(/\/v1\/?$/, "") : undefined;
@@ -32,7 +34,7 @@ export function getAgentEnv(): Record<string, string | undefined> {
 }
 
 export function getModel(): string {
-  return getSetting("agent_model") ?? getSetting("anthropic_model") ?? process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+  return getSetting("agent_model") ?? getSetting("anthropic_model") ?? process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001";
 }
 
 export function getSystemPrompt(): string {

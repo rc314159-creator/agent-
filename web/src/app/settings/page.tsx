@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, Save, Wifi, CheckCircle, XCircle, Loader2, Mic, Bot, Fingerprint } from "lucide-react";
+import { Settings, Save, Wifi, CheckCircle, XCircle, Loader2, Mic, Bot, Fingerprint, Sparkles } from "lucide-react";
 
 const DEFAULT_SYSTEM_PROMPT = `你是一个专业的会议记录分析助手。你的任务是分析会议记录，生成结构化的会议总结。
 总结应包含：
@@ -14,17 +14,32 @@ const DEFAULT_SYSTEM_PROMPT = `你是一个专业的会议记录分析助手。�
 请用中文输出，格式清晰，使用 Markdown。`;
 
 const PROVIDERS = [
-  { label: "Anthropic 官方", baseUrl: "https://api.anthropic.com" },
+  { label: "llmmelon (推荐)", baseUrl: "https://llmmelon.cloud/v1" },
   { label: "云雾中转 (yunwu.ai)", baseUrl: "https://api.yunwu.ai" },
+  { label: "Anthropic 官方", baseUrl: "https://api.anthropic.com" },
   { label: "自定义", baseUrl: "" },
 ];
+const CUSTOM_PROVIDER_IDX = PROVIDERS.length - 1;
 
 const MODELS = [
-  "claude-sonnet-4-5-20250929",
-  "claude-opus-4-7-20250929",
   "claude-haiku-4-5-20251001",
-  "claude-sonnet-4-6",
-  "claude-opus-4-7",
+  "claude-sonnet-4-5-20250929",
+  "claude-opus-4-5-20251101",
+  "claude-opus-4-7-20250929",
+];
+
+const EMBED_PROVIDERS = [
+  { label: "云雾 (yunwu.ai)", baseUrl: "https://api.yunwu.ai/v1" },
+  { label: "llmmelon", baseUrl: "https://llmmelon.cloud/v1" },
+  { label: "OpenAI 官方", baseUrl: "https://api.openai.com/v1" },
+  { label: "自定义", baseUrl: "" },
+];
+const EMBED_CUSTOM_IDX = EMBED_PROVIDERS.length - 1;
+
+const EMBED_MODELS = [
+  "text-embedding-3-small",
+  "text-embedding-3-large",
+  "text-embedding-ada-002",
 ];
 
 type PingStatus = "idle" | "loading" | "ok" | "error";
@@ -46,12 +61,12 @@ export default function SettingsPage() {
   const [asrPing, setAsrPing] = useState<PingStatus>("idle");
   const [asrPingMsg, setAsrPingMsg] = useState("");
 
-  // Agent block
+  // Agent block (default → llmmelon + haiku-4.5)
   const [agentKey, setAgentKey] = useState("");
   const [agentKeyChanged, setAgentKeyChanged] = useState(false);
   const [agentKeySaved, setAgentKeySaved] = useState(false);
-  const [agentBaseUrl, setAgentBaseUrl] = useState("https://api.anthropic.com");
-  const [agentModel, setAgentModel] = useState("claude-sonnet-4-5-20250929");
+  const [agentBaseUrl, setAgentBaseUrl] = useState(PROVIDERS[0].baseUrl);
+  const [agentModel, setAgentModel] = useState("claude-haiku-4-5-20251001");
   const [agentSystemPrompt, setAgentSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [providerIdx, setProviderIdx] = useState(0);
   const [customUrl, setCustomUrl] = useState("");
@@ -64,6 +79,18 @@ export default function SettingsPage() {
   const [vpSaving, setVpSaving] = useState(false);
   const [vpPing, setVpPing] = useState<PingStatus>("idle");
   const [vpPingMsg, setVpPingMsg] = useState("");
+
+  // Embedding block (默认云雾，预留给后续 RAG/向量检索)
+  const [embedKey, setEmbedKey] = useState("");
+  const [embedKeyChanged, setEmbedKeyChanged] = useState(false);
+  const [embedKeySaved, setEmbedKeySaved] = useState(false);
+  const [embedBaseUrl, setEmbedBaseUrl] = useState(EMBED_PROVIDERS[0].baseUrl);
+  const [embedModel, setEmbedModel] = useState("text-embedding-3-small");
+  const [embedProviderIdx, setEmbedProviderIdx] = useState(0);
+  const [embedCustomUrl, setEmbedCustomUrl] = useState("");
+  const [embedSaving, setEmbedSaving] = useState(false);
+  const [embedPing, setEmbedPing] = useState<PingStatus>("idle");
+  const [embedPingMsg, setEmbedPingMsg] = useState("");
 
   useEffect(() => {
     fetch("/api/settings")
@@ -85,7 +112,7 @@ export default function SettingsPage() {
             setProviderIdx(idx);
             setAgentBaseUrl(PROVIDERS[idx].baseUrl);
           } else {
-            setProviderIdx(2);
+            setProviderIdx(CUSTOM_PROVIDER_IDX);
             setCustomUrl(storedBase);
             setAgentBaseUrl(storedBase);
           }
@@ -93,13 +120,67 @@ export default function SettingsPage() {
         if (s.agent_model ?? s.anthropic_model) setAgentModel((s.agent_model ?? s.anthropic_model)!);
         if (s.agent_system_prompt) setAgentSystemPrompt(s.agent_system_prompt);
         if (s.voiceprint_url) setVpUrl(s.voiceprint_url);
+
+        // Embedding
+        if (s.embedding_api_key) setEmbedKeySaved(true);
+        if (s.embedding_base_url) {
+          const stripV1e = (u: string) => u.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+          const storedE = stripV1e(s.embedding_base_url);
+          const idxE = EMBED_PROVIDERS.findIndex((p) => p.baseUrl && stripV1e(p.baseUrl) === storedE);
+          if (idxE >= 0) {
+            setEmbedProviderIdx(idxE);
+            setEmbedBaseUrl(EMBED_PROVIDERS[idxE].baseUrl);
+          } else {
+            setEmbedProviderIdx(EMBED_CUSTOM_IDX);
+            setEmbedCustomUrl(s.embedding_base_url);
+            setEmbedBaseUrl(s.embedding_base_url);
+          }
+        }
+        if (s.embedding_model) setEmbedModel(s.embedding_model);
       });
   }, []);
 
   function handleProviderChange(idx: number) {
     setProviderIdx(idx);
-    if (idx !== 2) setAgentBaseUrl(PROVIDERS[idx].baseUrl);
+    if (idx !== CUSTOM_PROVIDER_IDX) setAgentBaseUrl(PROVIDERS[idx].baseUrl);
     else setAgentBaseUrl(customUrl);
+  }
+
+  function handleEmbedProviderChange(idx: number) {
+    setEmbedProviderIdx(idx);
+    if (idx !== EMBED_CUSTOM_IDX) setEmbedBaseUrl(EMBED_PROVIDERS[idx].baseUrl);
+    else setEmbedBaseUrl(embedCustomUrl);
+  }
+
+  async function saveEmbed() {
+    setEmbedSaving(true);
+    const payload: Record<string, string> = {
+      embedding_base_url: embedBaseUrl,
+      embedding_model: embedModel,
+    };
+    if (embedKeyChanged && embedKey) payload.embedding_api_key = embedKey;
+    await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (embedKeyChanged && embedKey) { setEmbedKeySaved(true); setEmbedKeyChanged(false); setEmbedKey(""); }
+    setEmbedSaving(false);
+  }
+
+  async function pingEmbed() {
+    setEmbedPing("loading");
+    setEmbedPingMsg("");
+    try {
+      const r = await fetch("/api/embedding/ping", { method: "POST" });
+      const d = await r.json() as { ok: boolean; dim?: number; error?: string };
+      if (d.ok) {
+        setEmbedPing("ok");
+        setEmbedPingMsg(`连接成功${d.dim ? `，向量维度 ${d.dim}` : ""}`);
+      } else {
+        setEmbedPing("error");
+        setEmbedPingMsg(d.error ?? "未知错误");
+      }
+    } catch (e) {
+      setEmbedPing("error");
+      setEmbedPingMsg(String(e));
+    }
   }
 
   async function saveAsr() {
@@ -376,6 +457,96 @@ export default function SettingsPage() {
         </div>
         {vpPingMsg && (
           <p className={`text-xs ${vpPing === "ok" ? "text-emerald-400" : "text-red-400"}`}>{vpPingMsg}</p>
+        )}
+      </section>
+
+      {/* Embedding block (R12 新增，预留给后续 RAG / 向量检索) */}
+      <section className="space-y-4 rounded-lg border border-border/40 p-4">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-violet-400" />
+          <h2 className="text-sm font-medium">Embedding（向量检索，预留）</h2>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground">未启用</span>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          当前项目不调用 embedding，仅保留配置。后续 R12+ 加入向量检索 / 跨会议语义搜索时直接读取这里。
+        </p>
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Provider</label>
+          <div className="flex gap-2 flex-wrap">
+            {EMBED_PROVIDERS.map((p, i) => (
+              <button
+                key={p.label}
+                onClick={() => handleEmbedProviderChange(i)}
+                className={`text-xs px-3 py-1.5 rounded border ${
+                  embedProviderIdx === i
+                    ? "border-violet-500/60 bg-violet-500/15 text-violet-300"
+                    : "border-border/40 hover:bg-muted/40"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {embedProviderIdx === EMBED_CUSTOM_IDX && (
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Base URL</label>
+            <input
+              type="text"
+              value={embedCustomUrl}
+              onChange={(e) => { setEmbedCustomUrl(e.target.value); setEmbedBaseUrl(e.target.value); }}
+              placeholder="https://your-relay.com/v1"
+              className="w-full text-xs px-3 py-2 rounded bg-muted/60 border border-border/40"
+            />
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">API Key {embedKeySaved && !embedKeyChanged && <span className="text-emerald-400 ml-1">（已保存）</span>}</label>
+          <input
+            type="password"
+            value={embedKey}
+            onChange={(e) => { setEmbedKey(e.target.value); setEmbedKeyChanged(true); }}
+            placeholder={embedKeySaved ? "留空保持不变" : "sk-..."}
+            className="w-full text-xs px-3 py-2 rounded bg-muted/60 border border-border/40"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">模型</label>
+          <select
+            value={embedModel}
+            onChange={(e) => setEmbedModel(e.target.value)}
+            className="w-full text-xs px-3 py-2 rounded bg-muted/60 border border-border/40"
+          >
+            {EMBED_MODELS.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={saveEmbed}
+            disabled={embedSaving}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-50 transition-colors"
+          >
+            {embedSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            保存 Embedding 配置
+          </button>
+          <button
+            onClick={pingEmbed}
+            disabled={embedPing === "loading"}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-border/40 hover:bg-muted/40 disabled:opacity-50 transition-colors"
+          >
+            <StatusIcon status={embedPing} />
+            测试连接
+          </button>
+        </div>
+        {embedPingMsg && (
+          <p className={`text-xs ${embedPing === "ok" ? "text-emerald-400" : "text-red-400"}`}>{embedPingMsg}</p>
         )}
       </section>
     </div>

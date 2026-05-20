@@ -4,21 +4,23 @@ import Anthropic from "@anthropic-ai/sdk";
 export const runtime = "nodejs";
 
 export async function POST() {
-  // New keys first, fallback to old anthropic_* keys for backward compat
+  // New keys first; env LLMMELON_* preferred over legacy YUNWU_* / anthropic_*
   const apiKey =
     getSetting("agent_api_key") ??
-    getSetting("anthropic_api_key") ??
     process.env.ANTHROPIC_API_KEY ??
+    process.env.LLMMELON_API_KEY ??
+    getSetting("anthropic_api_key") ??
     process.env.YUNWU_API_KEY;
   const rawBase =
     getSetting("agent_base_url") ??
-    getSetting("anthropic_base_url") ??
     process.env.ANTHROPIC_BASE_URL ??
+    (process.env.LLMMELON_API_KEY ? process.env.LLMMELON_BASE_URL : undefined) ??
+    getSetting("anthropic_base_url") ??
     (process.env.YUNWU_API_KEY ? process.env.YUNWU_BASE_URL : undefined);
   const model =
     getSetting("agent_model") ??
     getSetting("anthropic_model") ??
-    "claude-sonnet-4-5-20250929";
+    "claude-haiku-4-5-20251001";
   const baseURL = rawBase ? rawBase.replace(/\/v1\/?$/, "") : undefined;
 
   if (!apiKey) {
