@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, use } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, Play, Pause, Edit2, AlertTriangle, Check } from "lucide-react";
+import { ChevronLeft, Play, Pause, Edit2, AlertTriangle, Check, Trash2 } from "lucide-react";
 
 interface Utterance {
   id: string;
@@ -37,6 +38,7 @@ function confidencePct(c: number): string {
 
 export default function SpeakerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const [speaker, setSpeaker] = useState<Speaker | null>(null);
   const [utterances, setUtterances] = useState<Utterance[]>([]);
   const [others, setOthers] = useState<OtherSpeaker[]>([]);
@@ -44,6 +46,31 @@ export default function SpeakerDetailPage({ params }: { params: Promise<{ id: st
   const [draft, setDraft] = useState("");
   const [playing, setPlaying] = useState<string | null>(null);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = useCallback(async () => {
+    if (!speaker) return;
+    const hasUtts = utterances.length > 0;
+    const confirmMsg = hasUtts
+      ? `确认删除角色「${speaker.name}」？\n该角色下还有 ${utterances.length} 条发言，将一同删除（音频文件也会删除）。\n此操作不可撤销。`
+      : `确认删除角色「${speaker.name}」？\n此操作不可撤销。`;
+    if (!window.confirm(confirmMsg)) return;
+    setDeleting(true);
+    try {
+      const url = hasUtts ? `/api/speakers/${speaker.id}?cascade=1` : `/api/speakers/${speaker.id}`;
+      const res = await fetch(url, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`删除失败：${data.error ?? res.statusText}`);
+        setDeleting(false);
+        return;
+      }
+      router.push("/voiceprints");
+    } catch (e) {
+      alert(`删除异常：${e instanceof Error ? e.message : String(e)}`);
+      setDeleting(false);
+    }
+  }, [speaker, utterances.length, router]);
 
   const load = useCallback(async () => {
     const [s, all] = await Promise.all([
@@ -167,6 +194,14 @@ export default function SpeakerDetailPage({ params }: { params: Promise<{ id: st
           </>
         )}
         <span className="text-xs text-muted-foreground ml-auto">{speaker.sampleCount} 段样本</span>
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/30 disabled:opacity-50"
+          title={utterances.length > 0 ? `删除角色（连同 ${utterances.length} 条发言）` : "删除角色"}
+        >
+          <Trash2 className="w-3 h-3" /> {deleting ? "删除中…" : "删除"}
+        </button>
       </div>
 
       {utterances.length === 0 ? (

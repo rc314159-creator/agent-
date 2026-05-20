@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
-import { getDb, now, type SpeakerRow, type UtteranceRow } from "@/lib/db";
+import fs from "node:fs";
+import path from "node:path";
+import { getDb, getSegmentsDir, now, type SpeakerRow, type UtteranceRow } from "@/lib/db";
 import { recomputeCentroid } from "@/lib/match";
 
 export const runtime = "nodejs";
@@ -77,4 +79,49 @@ export async function PATCH(
   }
 
   return Response.json({ error: "no-op" }, { status: 400 });
+}
+
+/**
+ * DELETE /api/speakers/[id]?cascade=1
+ *
+ * 默认（无 cascade）：仅当 speaker 没有任何 utterance 才允许删，避免误删。
+ * cascade=1：连同所有 utterances 一起删（含 data/segments 下的 wav 文件）。
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  const url = new URL(req.url);
+  const cascade = url.searchParams.get("cascade") === "1";
+  const db = getDb();
+
+  const speaker = db.prepare<[string], SpeakerRow>("SELECT * FROM speakers WHERE id = ?").get(id);
+  if (!speaker) return Response.json({ error: "not found" }, { status: 404 });
+
+  const utts = db
+    .prepare<[string], { id: string; audio_path: string | null }>("SELECT id, audio_path FROM utterances WHERE speaker_id = ?")
+    .all(id);
+
+  if (utts.length > 0 && !cascade) {
+    return Response.json({
+      error: `该角色下还有 ${utts.length} 条发言。删除前请先移走或使用 cascade=1 一起删`,
+      utteranceCount: utts.length,
+    }, { status: 409 });
+  }
+
+  // cascade: 删音频文件 + utterance 行
+  if (cascade && utts.length > 0) {
+    const segDir = getSegmentsDir();
+    for (const u of utts) {
+      if (u.audio_path) {
+        const p = path.isAbsolute(u.audio_path) ? u.audio_path : path.join(segDir, u.audio_path);
+        try { fs.unlinkSync(p); } catch { /* file may already be gone */ }
+      }
+    }
+    db.prepare("DELETE FROM utterances WHERE speaker_id = ?").run(id);
+  }
+
+  db.prepare("DELETE FROM speakers WHERE id = ?").run(id);
+  return Response.json({ ok: true, deletedUtterances: cascade ? utts.length : 0 });
 }
