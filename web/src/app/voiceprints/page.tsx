@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Users, ChevronRight } from "lucide-react";
+import { Users, ChevronRight, GitMerge, X } from "lucide-react";
 
 interface SpeakerItem {
   id: string;
@@ -11,6 +11,12 @@ interface SpeakerItem {
   createdAt: number;
   updatedAt: number;
   lastSeen: number | null;
+}
+
+interface DupPair {
+  aId: string; aName: string;
+  bId: string; bName: string;
+  similarity: number;
 }
 
 function formatDate(ts: number | null): string {
@@ -26,22 +32,47 @@ function formatDate(ts: number | null): string {
 export default function VoiceprintsListPage() {
   const [items, setItems] = useState<SpeakerItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dups, setDups] = useState<DupPair[]>([]);
+  const [merging, setMerging] = useState<string | null>(null);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [speakersRes, dupsRes] = await Promise.all([
+        fetch("/api/speakers").then((r) => r.json()),
+        fetch("/api/speakers/duplicates?threshold=0.85").then((r) => r.json()),
+      ]);
+      setItems(speakersRes.speakers ?? []);
+      setDups(dupsRes.pairs ?? []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch("/api/speakers");
-        const data = await res.json();
-        if (!cancelled) setItems(data.speakers ?? []);
-      } finally {
-        if (!cancelled) setLoading(false);
+    loadAll();
+  }, [loadAll]);
+
+  const mergeInto = useCallback(async (sourceId: string, targetId: string) => {
+    setMerging(sourceId);
+    try {
+      const res = await fetch(`/api/speakers/${sourceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mergeIntoId: targetId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`合并失败：${data.error ?? res.statusText}`);
+      } else {
+        await loadAll();
       }
+    } finally {
+      setMerging(null);
     }
-    load();
-    return () => {
-      cancelled = true;
-    };
+  }, [loadAll]);
+
+  const dismissDup = useCallback((aId: string, bId: string) => {
+    setDups((prev) => prev.filter((p) => !(p.aId === aId && p.bId === bId)));
   }, []);
 
   return (
@@ -51,6 +82,43 @@ export default function VoiceprintsListPage() {
         <h1 className="text-lg font-semibold">声纹库</h1>
         <span className="text-xs text-muted-foreground ml-1">({items.length})</span>
       </div>
+
+      {/* Duplicate suggestion banner: 算法发现可能重复的 speaker，提示用户合并 */}
+      {dups.length > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs text-amber-300">
+            <GitMerge className="w-3.5 h-3.5" />
+            <span className="font-medium">检测到 {dups.length} 对可能重复的角色（centroid 相似度 ≥ 0.85）</span>
+          </div>
+          <ul className="space-y-1.5">
+            {dups.map((p) => (
+              <li key={`${p.aId}-${p.bId}`} className="flex items-center gap-2 text-xs">
+                <span className="text-foreground">「{p.aName}」</span>
+                <span className="text-muted-foreground">↔</span>
+                <span className="text-foreground">「{p.bName}」</span>
+                <span className="text-amber-300 ml-1">相似 {Math.round(p.similarity * 100)}%</span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => mergeInto(p.aId, p.bId)}
+                  disabled={merging === p.aId}
+                  className="text-[11px] px-2 py-0.5 rounded bg-violet-600/70 hover:bg-violet-500 text-white disabled:opacity-50"
+                  title={`把「${p.aName}」并入「${p.bName}」`}
+                >
+                  {merging === p.aId ? "合并中…" : `→ 合并到「${p.bName}」`}
+                </button>
+                <button
+                  onClick={() => dismissDup(p.aId, p.bId)}
+                  className="text-[11px] p-0.5 rounded hover:bg-muted/40 text-muted-foreground"
+                  title="不是同一人，忽略"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-sm text-muted-foreground">加载中…</p>
       ) : items.length === 0 ? (

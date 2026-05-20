@@ -26,7 +26,7 @@ import {
   now,
 } from "@/lib/db";
 import { embedAudio } from "@/lib/voiceprint-client";
-import { matchAndAssign, recomputeCentroid } from "@/lib/match";
+import { audioQualityGate, matchAndAssign, recomputeCentroid } from "@/lib/match";
 import { emitUtterance } from "@/lib/sse-bus";
 
 export const runtime = "nodejs";
@@ -46,6 +46,18 @@ export async function POST(req: NextRequest) {
   const wavBytes = Buffer.from(await req.arrayBuffer());
   if (wavBytes.length < 1024) {
     return Response.json({ error: "audio too short" }, { status: 400 });
+  }
+
+  // 音频质量门槛：拦住纯静音/纯单频（避免生成假 speaker）。
+  // 失败返回 200 + skipped:true，让前端 UI 显示"已跳过"而不是当 error
+  const quality = audioQualityGate(wavBytes);
+  if (!quality.ok) {
+    return Response.json({
+      skipped: true,
+      reason: quality.reason,
+      rms: quality.rms,
+      zcr: quality.zcr,
+    });
   }
 
   const utteranceId = newId();
