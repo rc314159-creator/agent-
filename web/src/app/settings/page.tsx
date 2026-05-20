@@ -32,9 +32,13 @@ type PingStatus = "idle" | "loading" | "ok" | "error";
 
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
+  const [apiKeyChanged, setApiKeyChanged] = useState(false);
+  const [apiKeySaved, setApiKeySaved] = useState(false); // true if a key is already stored
   const [baseUrl, setBaseUrl] = useState("https://api.anthropic.com");
   const [model, setModel] = useState("claude-sonnet-4-5-20250929");
   const [dashscopeKey, setDashscopeKey] = useState("");
+  const [dashscopeKeyChanged, setDashscopeKeyChanged] = useState(false);
+  const [dashscopeKeySaved, setDashscopeKeySaved] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [providerIdx, setProviderIdx] = useState(0);
   const [customUrl, setCustomUrl] = useState("");
@@ -48,10 +52,11 @@ export default function SettingsPage() {
       .then((r) => r.json())
       .then((d: { settings: Record<string, string> }) => {
         const s = d.settings ?? {};
-        if (s.anthropic_api_key) setApiKey(s.anthropic_api_key);
+        // Don't pre-fill masked key values — track that a key exists and show placeholder
+        if (s.anthropic_api_key) setApiKeySaved(true);
+        if (s.dashscope_api_key) setDashscopeKeySaved(true);
         if (s.anthropic_model) setModel(s.anthropic_model);
         if (s.agent_system_prompt) setSystemPrompt(s.agent_system_prompt);
-        if (s.dashscope_api_key) setDashscopeKey(s.dashscope_api_key);
         if (s.anthropic_base_url) {
           const idx = PROVIDERS.findIndex((p) => p.baseUrl === s.anthropic_base_url);
           if (idx >= 0) {
@@ -81,13 +86,16 @@ export default function SettingsPage() {
     setSaving(true);
     setSaved(false);
     const payload: Record<string, string> = {
-      anthropic_api_key: apiKey,
       anthropic_base_url: baseUrl,
       anthropic_model: model,
       agent_system_prompt: systemPrompt,
     };
-    if (dashscopeKey) payload.dashscope_api_key = dashscopeKey;
+    // Only send key fields if the user actually typed a new value
+    if (apiKeyChanged && apiKey) payload.anthropic_api_key = apiKey;
+    if (dashscopeKeyChanged && dashscopeKey) payload.dashscope_api_key = dashscopeKey;
     await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (apiKeyChanged && apiKey) { setApiKeySaved(true); setApiKeyChanged(false); setApiKey(""); }
+    if (dashscopeKeyChanged && dashscopeKey) { setDashscopeKeySaved(true); setDashscopeKeyChanged(false); setDashscopeKey(""); }
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -151,12 +159,17 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">API Key</label>
+          <label className="text-xs text-muted-foreground">
+            API Key
+            {apiKeySaved && !apiKeyChanged && (
+              <span className="ml-2 text-emerald-400">已配置</span>
+            )}
+          </label>
           <input
             type="password"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-..."
+            onChange={(e) => { setApiKey(e.target.value); setApiKeyChanged(true); }}
+            placeholder={apiKeySaved ? "输入新 key 以替换（留空保持不变）" : "sk-..."}
             className="w-full px-3 py-2 text-sm rounded-md border border-border/40 bg-background focus:outline-none focus:ring-1 focus:ring-violet-500/50"
           />
         </div>
@@ -176,7 +189,7 @@ export default function SettingsPage() {
 
         <button
           onClick={handlePing}
-          disabled={pingStatus === "loading" || !apiKey}
+          disabled={pingStatus === "loading" || (!apiKey && !apiKeySaved)}
           className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-border/40 hover:bg-muted/40 disabled:opacity-50 transition-colors"
         >
           {pingStatus === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
@@ -193,12 +206,17 @@ export default function SettingsPage() {
       <section className="space-y-4">
         <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">ASR (语音识别)</h2>
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">DashScope API Key</label>
+          <label className="text-xs text-muted-foreground">
+            DashScope API Key
+            {dashscopeKeySaved && !dashscopeKeyChanged && (
+              <span className="ml-2 text-emerald-400">已配置</span>
+            )}
+          </label>
           <input
             type="password"
             value={dashscopeKey}
-            onChange={(e) => setDashscopeKey(e.target.value)}
-            placeholder="sk-..."
+            onChange={(e) => { setDashscopeKey(e.target.value); setDashscopeKeyChanged(true); }}
+            placeholder={dashscopeKeySaved ? "输入新 key 以替换（留空保持不变）" : "sk-..."}
             className="w-full px-3 py-2 text-sm rounded-md border border-border/40 bg-background focus:outline-none focus:ring-1 focus:ring-violet-500/50"
           />
           <p className="text-xs text-muted-foreground">若留空，则使用环境变量 DASHSCOPE_API_KEY</p>
