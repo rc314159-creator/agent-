@@ -68,6 +68,8 @@ utterances (id, meeting_id, speaker_id, text, start_ms, end_ms,
 - [2026.05.20 R8 录音通道+流式字幕](开发计划/2026.05.20/r8-audio-channels-and-streaming.md) — 通道选择（麦克风/系统/混合）+ 麦克风测试 UI + SSE 流式字幕
 - [2026.05.20 R9 Agent SDK+会议总结](开发计划/2026.05.20/r9-agent-sdk-summary-and-memory.md) — Claude Agent SDK + 4 工具 + 跨会议 memory + 流式总结 API
 - [2026.05.20 R10 Settings 页](开发计划/2026.05.20/r10-settings-page.md) — /settings 页 + SQLite settings 表 + API key & model & system prompt 配置
+- [2026.05.20 R11 AI 问答+下载+Settings重构](开发计划/2026.05.20/r11-chat-export-settings.md) — AI 多轮问答 Chat 面板 + 推荐 prompt chips + 角色绑定 transcript + 两个下载按钮 + Settings 按功能块重构（ASR/Agent/Voiceprint）
+- [2026.05.20 R11b 飞书文档](开发计划/2026.05.20/r11b-feishu-docs.md) — 项目介绍 / 使用指南 / 系统原理 3 份飞书文档大纲
 
 ---
 
