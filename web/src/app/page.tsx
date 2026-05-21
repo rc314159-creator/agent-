@@ -234,6 +234,11 @@ export default function RecorderPage() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        // audioQualityGate 拒了的段（静音 / ZCR 异常 / 太短）→ 不入库，直接把占位气泡删掉
+        if (data.skipped) {
+          setLines((prev) => prev.filter((l) => l.id !== placeholderId));
+          return;
+        }
         setLines((prev) =>
           prev.map((l) =>
             l.id === placeholderId
@@ -499,6 +504,32 @@ export default function RecorderPage() {
     [others, loadOthers],
   );
 
+  // 一键把本次录音的所有 utterance 全部归到指定 speaker（用于"短句一人多角色"场景）
+  const mergeAllInto = useCallback(async (targetSpeakerId: string) => {
+    const target = others.find((o) => o.id === targetSpeakerId);
+    if (!target) return;
+    const linesToMove = lines.filter((l) => l.utteranceId && l.speakerId !== targetSpeakerId);
+    if (linesToMove.length === 0) return;
+    if (!window.confirm(`把当前 ${linesToMove.length} 条发言全部归到「${target.name}」？`)) return;
+    await Promise.all(
+      linesToMove.map((l) =>
+        fetch(`/api/utterances/${l.utteranceId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ speakerId: targetSpeakerId }),
+        }),
+      ),
+    );
+    setLines((prev) =>
+      prev.map((l) =>
+        l.utteranceId && l.speakerId !== targetSpeakerId
+          ? { ...l, speakerId: targetSpeakerId, speakerName: target.name, needsReview: false }
+          : l,
+      ),
+    );
+    loadOthers();
+  }, [lines, others, loadOthers]);
+
   const confirmLine = useCallback(async (line: LiveLine) => {
     if (!line.utteranceId) return;
     await fetch(`/api/utterances/${line.utteranceId}`, {
@@ -595,8 +626,27 @@ export default function RecorderPage() {
         </div>
       )}
 
-      {/* Live transcript */}
-      <div className="space-y-2">
+      {/* 录音中：一键合并工具栏（解决"短句被分成多个新用户"问题） */}
+      {recording && lines.filter((l) => l.utteranceId).length > 0 && (
+        <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
+          <span>这都是我一个人？</span>
+          <select
+            className="text-xs px-2 py-1 rounded bg-muted/60 border border-border/40 outline-none"
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value) mergeAllInto(e.target.value);
+            }}
+          >
+            <option value="">一键全部归到…</option>
+            {others.map((o) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Live transcript — 单行紧凑列表，文本可选可复制 */}
+      <div className="select-text">
         {lines.length === 0 && !recording && (
           <p className="text-sm text-muted-foreground text-center py-12">
             点击 <span className="text-foreground">开始录音</span> 开始。
@@ -605,61 +655,55 @@ export default function RecorderPage() {
           </p>
         )}
         {lines.map((l) => {
-          const showOptions = l.status === "matched" && (l.needsReview || l.isNewSpeaker);
+          const canEdit = l.status === "matched" && l.utteranceId;
           return (
             <div
               key={l.id}
-              className={`p-3 rounded-lg border ${
-                l.needsReview ? "border-amber-500/40 bg-amber-500/5" : "border-border/40"
+              className={`flex items-baseline gap-2 px-1 py-0.5 text-sm leading-7 hover:bg-muted/20 rounded ${
+                l.needsReview ? "bg-amber-500/5" : ""
               }`}
             >
-              <div className="flex items-center gap-2 mb-1.5">
-                <span
-                  className={`text-[11px] px-2 py-0.5 rounded border ${speakerColorFor(colorMapRef.current, l.speakerId, l.status)}`}
-                >
-                  {l.speakerName}
+              <span
+                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${speakerColorFor(colorMapRef.current, l.speakerId, l.status)}`}
+              >
+                {l.speakerName}
+              </span>
+              {l.status === "matched" && l.confidence > 0 && (
+                <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums w-9 text-right">
+                  {Math.round(l.confidence * 100)}%
                 </span>
-                {l.status === "embedding" && (
-                  <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                )}
-                {l.needsReview && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
-                {l.status === "matched" && l.confidence > 0 && (
-                  <span className="text-[10px] text-muted-foreground">
-                    匹配 {Math.round(l.confidence * 100)}%
-                  </span>
-                )}
-                {l.status === "live" && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                )}
-              </div>
-              <p className="text-sm leading-relaxed">{l.text}</p>
-              {showOptions && (
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
+              )}
+              {l.status === "embedding" && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground shrink-0" />}
+              {l.status === "live" && <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse shrink-0" />}
+              {l.needsReview && <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />}
+              <span className="flex-1">{l.text}</span>
+              {canEdit && (
+                <>
                   {l.needsReview && (
                     <button
                       onClick={() => confirmLine(l)}
-                      className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                      className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 opacity-60 hover:opacity-100"
+                      title="确认归属"
                     >
-                      <Check className="w-3 h-3" /> 确认
+                      <Check className="w-3 h-3" />
                     </button>
                   )}
                   <select
-                    className="text-xs px-2 py-1 rounded bg-muted/60 border border-border/40 outline-none"
+                    className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-transparent border-0 text-muted-foreground hover:text-foreground opacity-40 hover:opacity-100 cursor-pointer max-w-[80px]"
                     defaultValue=""
                     onChange={(e) => {
                       if (e.target.value) moveLine(l, e.target.value);
                     }}
+                    title="移到其他角色"
                   >
                     <option value="">移到…</option>
                     {others
                       .filter((o) => o.id !== l.speakerId)
                       .map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.name}
-                        </option>
+                        <option key={o.id} value={o.id}>{o.name}</option>
                       ))}
                   </select>
-                </div>
+                </>
               )}
             </div>
           );
